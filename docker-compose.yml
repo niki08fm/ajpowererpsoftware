@@ -1,0 +1,20 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: ajp-erp-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ajp_erp
+      MYSQL_USER: ajp
+      MYSQL_PASSWORD: ajp
+    command: --default-authentication-plugin=caching_sha2_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ajp-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uajp", "-pajp"]
+      interval: 5s
+      retries: 20
+volumes:
+  ajp-mysql:
