@@ -54,12 +54,12 @@ Everything else has a working default.
 ```bash
 cd backend
 npm run db:reset     # DROPS your database and rebuilds it empty
-npm test             # 168 tests
+npm test             # 211 tests
 ```
 
 `npm test` builds and uses its own database, `ajp_erp_test`. It deletes
-every site, work order, BOQ, indent, issue, return and expense before
-it runs, so it refuses to
+every site, work order, BOQ, indent, issue, return, expense and bill
+before it runs, so it refuses to
 start against any database whose name does not end in `_test`. Your
 working data is never touched.
 
@@ -90,11 +90,17 @@ of that material and has no price to quote. Every document still
 stamps what the central store was holding the item at on the day it
 moved, and keeps it.
 
+**Billing** — open a site and bill against its work order, line by
+line, at the rates the client agreed. Bills run RA 1, RA 2, RA 3, and
+a line bills up to what material has been indented for — past the
+agreed quantity too, if the indent went there, with the sheet saying
+so.
+
 **Reports** — the expense report: material consumed plus approved
 expenses, for one site or all of them, over any window, with the
-running total to date. And a profit and loss that declines to exist,
-because nothing has been billed to a client yet and cost minus an
-agreement is not profit.
+running total to date. And a profit and loss, which exists for a site
+the moment its first bill is raised and declines to exist before
+that — cost minus an agreement is not profit.
 
 The thread runs: work order line → BOQ lines (1a, 1b, 1c) → indented →
 used. For any BOQ line you can ask what was estimated, what's been

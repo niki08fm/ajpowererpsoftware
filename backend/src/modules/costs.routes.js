@@ -393,13 +393,18 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
        FROM bills b JOIN bill_lines l ON l.bill_id = b.id
       WHERE ${revWhere.join(' AND ')}`, revParams);
 
+  // The order book, struck on the AMENDED quantity — the same one
+  // billing works to. work_order_lines.line_total is the original
+  // contract, and on an amended site using it makes "not yet billed"
+  // come out negative.
   const orderWhere = [];
   const orderParams = [];
-  if (q.siteId) { orderWhere.push('wo.site_id = ?'); orderParams.push(q.siteId); }
-  else if (q.branchId) { orderWhere.push('wo.branch_id = ?'); orderParams.push(q.branchId); }
+  if (q.siteId) { orderWhere.push('v.site_id = ?'); orderParams.push(q.siteId); }
+  else if (q.branchId) { orderWhere.push('v.branch_id = ?'); orderParams.push(q.branchId); }
   const ordered = await one(
-    `SELECT COALESCE(SUM(l.line_total), 0) AS value, COUNT(DISTINCT wo.id) AS orders
-       FROM work_orders wo JOIN work_order_lines l ON l.work_order_id = wo.id
+    `SELECT COALESCE(SUM(v.contract_value), 0) AS value,
+            COUNT(DISTINCT v.work_order_id) AS orders
+       FROM v_billing_line v
        ${orderWhere.length ? `WHERE ${orderWhere.join(' AND ')}` : ''}`, orderParams);
 
   const revenue = money(rev.revenue);
@@ -413,9 +418,8 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
             COALESCE(c.cost, 0)    AS cost,
             COALESCE(r.revenue, 0) AS revenue,
             COALESCE(r.bills, 0)   AS bills,
-            COALESCE((SELECT SUM(wl.line_total) FROM work_orders wo
-                        JOIN work_order_lines wl ON wl.work_order_id = wo.id
-                       WHERE wo.site_id = s.id), 0) AS order_value
+            COALESCE((SELECT SUM(v.contract_value) FROM v_billing_line v
+                       WHERE v.site_id = s.id), 0) AS order_value
        FROM sites s
        LEFT JOIN clients cl ON cl.id = s.client_id
        LEFT JOIN (SELECT site_id, SUM(amount) AS cost FROM v_cost_event
@@ -471,7 +475,7 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
     orderCount: Number(ordered.orders),
     // what has been earned against what was agreed: the order book
     // less what has been billed off it
-    unbilledOrderValue: money(Number(ordered.value) - revenue),
+    unbilledOrderValue: money(Math.max(Number(ordered.value) - revenue, 0)),
     sites: sites.map((r) => ({
       ...r,
       cost: money(r.cost),

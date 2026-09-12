@@ -25,6 +25,18 @@ const { conflict, notFound, badRequest } = require('../lib/errors');
  * Bills run in sequence, RA 1, RA 2, RA 3, each billing what has been
  * done since the last. The running total is held here so nobody has
  * to keep it on paper, and nothing may be billed twice.
+ *
+ * What may be billed has one ceiling: what material has been
+ * indented for. A line agreed at 100 with material in for 60 bills
+ * to 60 — work nobody has asked for material for has not been done,
+ * and invoicing it is how a running account bill gets thrown back.
+ *
+ * The agreed quantity is not a second ceiling. Indenting past the
+ * estimate takes a BOQ that permits it, and permitting it is a
+ * deliberate decision that more work is being done than was first
+ * written down, so the billing follows the material. What it does
+ * not do is happen quietly — a line running past the work order is
+ * reported back and shown.
  */
 
 const money = (n) => Math.round(Number(n) * 100) / 100;
@@ -44,13 +56,19 @@ async function requireBill(id, conn) {
 router.get('/sites',
   validate(z.object({
     branchId: z.coerce.number().int().positive().optional(),
+    clientId: z.coerce.number().int().positive().optional(),
     q: z.string().trim().optional(),
   }), 'query'),
   wrap(async (req, res) => {
     const where = [`s.site_type = 'SITE'`];
     const params = [];
     if (req.query.branchId) { where.push('s.branch_id = ?'); params.push(req.query.branchId); }
-    if (req.query.q) { where.push('s.name LIKE ?'); params.push(`%${req.query.q}%`); }
+    if (req.query.clientId) { where.push('s.client_id = ?'); params.push(req.query.clientId); }
+    if (req.query.q) {
+      // a site is as often remembered by its client as by its own name
+      where.push('(s.name LIKE ? OR c.name LIKE ?)');
+      params.push(`%${req.query.q}%`, `%${req.query.q}%`);
+    }
 
     const rows = await many(
       `SELECT s.id AS site_id, s.code, s.name, s.status,
@@ -125,6 +143,7 @@ router.get('/sheet/:siteId', wrap(async (req, res) => {
   const draftBy = Object.fromEntries(draftLines.map((l) => [l.wo_line_id, l]));
 
   const sum = (k) => money(lines.reduce((t, l) => t + Number(l[k]), 0));
+  const contract = sum('contract_value');
   res.json({
     site,
     workOrder: wo,
@@ -134,12 +153,17 @@ router.get('/sheet/:siteId', wrap(async (req, res) => {
     nextRaNo: (bills.reduce((m, b) => Math.max(m, Number(b.ra_no)), 0) || 0) + 1,
     totals: {
       lines: lines.length,
-      contractValue: sum('contract_value'),
+      contractValue: contract,
       billedValue: sum('billed_value'),
+      // billable and billed beyond what the client signed. Allowed,
+      // and never left for them to discover.
+      overContractValue: sum('over_contract_value'),
+      // what can go on a bill today: provisioned, agreed, not yet billed
       toBillValue: sum('to_bill_value'),
-      billedPct: sum('contract_value') > 0
-        ? Math.round((sum('billed_value') / sum('contract_value')) * 10000) / 100
-        : 0,
+      // and what cannot, because nobody has asked for the material.
+      // Named rather than left as an unexplained gap in the total.
+      unprovisionedValue: sum('unprovisioned_value'),
+      billedPct: contract > 0 ? Math.round((sum('billed_value') / contract) * 10000) / 100 : 0,
     },
   });
 }));
@@ -178,16 +202,35 @@ async function checkLines(conn, workOrderId, lines, exceptBillId = null) {
     if (!v) throw badRequest('One of those lines is not on this work order');
 
     const already = Number(v.billed_qty);
-    const room = round3(Number(v.boq_qty) - already);
+    const agreed = Number(v.boq_qty);
+    const indented = Number(v.indented_qty);
+    const room = round3(Number(v.to_bill_qty));
+
     if (Number(l.qty) > room + 0.0005) {
       throw conflict(
-        `Line ${v.sno} — ${v.description}: ${v.boq_qty} is the agreed quantity and `
-        + `${round3(already)} is already billed, so only ${Math.max(room, 0)} is left. `
-        + 'Amend the BOQ first if more was actually done.',
-        { woLineId: l.woLineId, agreed: Number(v.boq_qty), billed: already, left: room }
+        indented <= 0
+          ? `Line ${v.sno} — ${v.description}: no material has been indented for this `
+            + 'line, so there is nothing to bill. Raise an indent first.'
+          : `Line ${v.sno} — ${v.description}: ${round3(indented)} ${v.uom} has been `
+            + `indented for and ${round3(already)} is already billed, so `
+            + `${Math.max(room, 0)} can be billed. Indent the rest before invoicing it.`,
+        {
+          woLineId: l.woLineId,
+          agreed,
+          indented,
+          billed: already,
+          left: room,
+          limitedBy: 'INDENTED',
+        }
       );
     }
-    out.push({ ...l, line: v });
+
+    // Running past the work order is allowed — indenting beyond the
+    // estimate takes a BOQ that permits it, and that is a decision
+    // that more work is being done. It is reported back so the screen
+    // can say so rather than letting it go by unnoticed.
+    const overBy = round3(already + Number(l.qty) - agreed);
+    out.push({ ...l, line: v, overContract: overBy > 0.0005 ? overBy : 0 });
   }
   return out;
 }
@@ -369,6 +412,7 @@ router.get('/',
   validate(z.object({
     branchId: z.coerce.number().int().positive().optional(),
     siteId: z.coerce.number().int().positive().optional(),
+    clientId: z.coerce.number().int().positive().optional(),
     status: z.enum(['DRAFT', 'RAISED', 'CANCELLED', 'ALL']).default('ALL'),
     from: DATE.optional(),
     to: DATE.optional(),
@@ -381,13 +425,18 @@ router.get('/',
     const params = [];
     if (q.siteId) { where.push('v.site_id = ?'); params.push(q.siteId); }
     else if (q.branchId) { where.push('v.branch_id = ?'); params.push(q.branchId); }
+    if (q.clientId) { where.push('v.client_id = ?'); params.push(q.clientId); }
     if (q.status !== 'ALL') { where.push('v.status = ?'); params.push(q.status); }
     if (q.from) { where.push('v.bill_date >= ?'); params.push(q.from); }
     if (q.to) { where.push('v.bill_date <= ?'); params.push(q.to); }
     if (q.q) {
-      where.push('(v.doc_no LIKE ? OR v.site_name LIKE ? OR v.client_ref LIKE ?)');
+      // whoever is looking for a bill knows one of four things about
+      // it: its number, the site, the client, or the reference the
+      // client put on their certificate. Any of them should find it.
+      where.push(`(v.doc_no LIKE ? OR v.site_name LIKE ? OR v.client_name LIKE ?
+                   OR v.client_ref LIKE ?)`);
       const like = `%${q.q}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, like);
     }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const rows = await many(

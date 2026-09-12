@@ -197,3 +197,136 @@ export function ItemPicker({ value, onPick, placeholder = 'Search the item maste
     </div>
   );
 }
+
+/* ------------------------------------------------------ client picker
+   A client has to exist before a site can belong to one, and the only
+   moment anybody discovers a client is missing is the moment they are
+   halfway through creating the site. Sending them off to a master
+   screen to add it loses everything they have typed, so the list adds
+   to itself: choose "Add a client", fill in three fields, and it is
+   chosen when the dialog closes.
+
+   The duplicate guard is the API's — "Already on the list as X" comes
+   back with the existing client's id, and rather than make the user
+   read an error and go looking, that client is simply selected. */
+export function ClientPicker({
+  value, onChange, branchId, branches, width = 260, autoFocus,
+}) {
+  const [adding, setAdding] = useState(false);
+  const { data, reload } = useApi(branchId ? `/masters/clients?branchId=${branchId}` : null,
+    [branchId]);
+  const clients = data || [];
+
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <select className="inp" style={{ width }} value={value || ''} autoFocus={autoFocus}
+          onChange={(e) => {
+            if (e.target.value === '__new') { setAdding(true); return; }
+            onChange(e.target.value);
+          }}>
+          <option value="">— choose the client —</option>
+          {clients.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}{c.gstin ? ` · ${c.gstin}` : ''}
+            </option>
+          ))}
+          <option disabled>──────────</option>
+          <option value="__new">+ Add a client</option>
+        </select>
+        <button type="button" className="btn" title="Add a client"
+          onClick={() => setAdding(true)}>+</button>
+      </div>
+      {adding && (
+        <NewClient branchId={branchId} branches={branches}
+          onClose={() => setAdding(false)}
+          onSaved={(id) => { reload(); onChange(String(id)); setAdding(false); }} />
+      )}
+    </>
+  );
+}
+
+function NewClient({ branchId, branches, onClose, onSaved }) {
+  const toast = useToast();
+  const [f, setF] = useState({
+    name: '', gstin: '', branchId: String(branchId || ''), address: '',
+    contactName: '', contactPhone: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+
+  // 15 characters, and nothing else is worth checking here — the
+  // client's own paperwork is the authority on their GSTIN
+  const gstinBad = f.gstin.trim().length > 0 && f.gstin.trim().length !== 15;
+  const ready = f.name.trim().length >= 2 && f.branchId && !gstinBad && !saving;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const r = await api.post('/masters/clients', {
+        name: f.name.trim(),
+        branchId: Number(f.branchId),
+        gstin: f.gstin.trim() || undefined,
+        address: f.address.trim() || undefined,
+        contactName: f.contactName.trim() || undefined,
+        contactPhone: f.contactPhone.trim() || undefined,
+      });
+      toast(`${r.name} added`, 'ok');
+      onSaved(r.id);
+    } catch (e) {
+      // already on the list: pick that one rather than make them read
+      // an error and go hunting for it
+      if (e.status === 409 && e.detail?.clientId) {
+        toast(e.message, '');
+        onSaved(e.detail.clientId);
+        return;
+      }
+      toast(e.message, 'bad');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Add a client"
+      sub="Only the name and the branch are needed now — the rest can follow"
+      onClose={onClose}
+      footer={
+        <button className="btn pri" disabled={!ready} onClick={save}>
+          {saving ? 'Adding…' : 'Add and choose'}
+        </button>
+      }>
+      <Field label="Client name">
+        <input className="inp" value={f.name} autoFocus placeholder="GMR Hyderabad Airport"
+          onChange={set('name')}
+          onKeyDown={(e) => { if (e.key === 'Enter' && ready) save(); }} />
+      </Field>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <Field label="GSTIN" hint={gstinBad ? 'A GSTIN is 15 characters' : 'Optional'}>
+          <input className="inp mono" style={{ width: 220 }} value={f.gstin}
+            placeholder="36AABCP1234M1Z5" maxLength={15}
+            onChange={(e) => setF((x) => ({ ...x, gstin: e.target.value.toUpperCase() }))} />
+        </Field>
+        <Field label="Branch">
+          <select className="inp" style={{ width: 200 }} value={f.branchId}
+            onChange={set('branchId')}>
+            {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Address" hint="Optional">
+        <input className="inp" value={f.address} onChange={set('address')} />
+      </Field>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <Field label="Who to speak to" hint="Optional">
+          <input className="inp" style={{ width: 220 }} value={f.contactName}
+            onChange={set('contactName')} />
+        </Field>
+        <Field label="Their number" hint="Optional">
+          <input className="inp" style={{ width: 180 }} value={f.contactPhone}
+            onChange={set('contactPhone')} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}

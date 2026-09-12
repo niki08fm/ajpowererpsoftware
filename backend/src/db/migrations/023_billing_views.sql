@@ -60,15 +60,67 @@ SELECT
   (wol.qty + COALESCE(bwl.var_qty, 0)) AS boq_qty,
   wol.supply_rate, wol.inst_rate,
   (wol.supply_rate + wol.inst_rate) AS rate,
-  wol.line_total AS contract_value,
+  -- what the client signed, before any amendment
+  wol.line_total AS original_value,
+  -- and what the line is worth now. This has to be struck on the
+  -- SAME quantity as everything beside it: the amended one. Using
+  -- work_order_lines.line_total here — which is the original — makes
+  -- contracted, billed and left-to-bill three numbers that cannot be
+  -- added up, and an amended line is exactly where anybody would
+  -- notice.
+  ROUND((wol.qty + COALESCE(bwl.var_qty, 0)) * (wol.supply_rate + wol.inst_rate), 2)
+    AS contract_value,
   COALESCE(ind.indented_qty, 0) AS indented_qty,
   COALESCE(bd.billed_qty, 0)    AS billed_qty,
   COALESCE(bd.billed_value, 0)  AS billed_value,
   bd.last_ra_no, bd.last_billed_on,
-  GREATEST((wol.qty + COALESCE(bwl.var_qty, 0)) - COALESCE(bd.billed_qty, 0), 0)
-    AS to_bill_qty,
-  ROUND(GREATEST((wol.qty + COALESCE(bwl.var_qty, 0)) - COALESCE(bd.billed_qty, 0), 0)
+
+  -- ------------------------------------------------- what may be billed
+  -- One ceiling: what material has been indented for.
+  --
+  -- Work nobody has asked for material for has not been done, and
+  -- invoicing it is how a running account bill gets thrown back. So
+  -- the indent is the limit.
+  --
+  -- The agreed quantity is NOT a second ceiling. Indenting past the
+  -- estimate takes a BOQ that permits it, and permitting it is a
+  -- deliberate decision that more work is being done than was first
+  -- written down — so the billing follows the material. What it does
+  -- not do is happen quietly: over_contract_qty names the part that
+  -- runs past the work order, so a biller can see it before the
+  -- client does.
+  COALESCE(ind.indented_qty, 0) AS billable_qty,
+  GREATEST(COALESCE(ind.indented_qty, 0) - COALESCE(bd.billed_qty, 0), 0) AS to_bill_qty,
+  ROUND(GREATEST(COALESCE(ind.indented_qty, 0) - COALESCE(bd.billed_qty, 0), 0)
         * (wol.supply_rate + wol.inst_rate), 2) AS to_bill_value,
+
+  -- Agreed, not billed, and not billable either: waiting on an
+  -- indent. Measured from whichever of indented/billed has got
+  -- further, so that
+  --
+  --   agreed + past the order = billed + can be billed + waiting
+  --
+  -- holds on every line however the three numbers fall.
+  GREATEST((wol.qty + COALESCE(bwl.var_qty, 0))
+           - GREATEST(COALESCE(ind.indented_qty, 0), COALESCE(bd.billed_qty, 0)), 0)
+    AS unprovisioned_qty,
+  ROUND(GREATEST((wol.qty + COALESCE(bwl.var_qty, 0))
+                 - GREATEST(COALESCE(ind.indented_qty, 0), COALESCE(bd.billed_qty, 0)), 0)
+        * (wol.supply_rate + wol.inst_rate), 2) AS unprovisioned_value,
+
+  -- and the part that runs past what the client signed. Allowed, and
+  -- shown.
+  GREATEST(GREATEST(COALESCE(ind.indented_qty, 0), COALESCE(bd.billed_qty, 0))
+           - (wol.qty + COALESCE(bwl.var_qty, 0)), 0) AS over_contract_qty,
+  ROUND(GREATEST(GREATEST(COALESCE(ind.indented_qty, 0), COALESCE(bd.billed_qty, 0))
+                 - (wol.qty + COALESCE(bwl.var_qty, 0)), 0)
+        * (wol.supply_rate + wol.inst_rate), 2) AS over_contract_value,
+
+  -- billed past what was indented for. The bills are with the client
+  -- so nothing is undone, but no more goes on until material is asked
+  -- for.
+  GREATEST(COALESCE(bd.billed_qty, 0) - COALESCE(ind.indented_qty, 0), 0)
+    AS over_billed_qty,
   CASE WHEN (wol.qty + COALESCE(bwl.var_qty, 0)) > 0
        THEN ROUND(COALESCE(bd.billed_qty, 0)
                   / (wol.qty + COALESCE(bwl.var_qty, 0)) * 100, 2)

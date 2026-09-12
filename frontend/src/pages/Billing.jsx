@@ -15,11 +15,18 @@ import {
  * this one answers to the client, so it speaks entirely in their
  * terms: their line, their wording, their unit, their rate.
  *
- * The BOQ, the indents and the consumption do not appear as things to
- * be billed. They appear as evidence beside the line — how much was
- * agreed, how much material has been provisioned for it — so whoever
- * types a quantity can see whether it is plausible before they
- * commit. What they are billing is still a work order line.
+ * The indent is the ceiling on what may be billed. A line agreed at
+ * 100 with material in for 60 bills to 60 — work nobody has asked
+ * for material for has not been done, and invoicing it is how an RA
+ * bill gets thrown back.
+ *
+ * The agreed quantity is not a second ceiling, and running past it
+ * is not treated as a fault. A work order is written before the work
+ * is measured — the client is estimating their own requirement, and
+ * on this kind of job it goes over. The indent is what reflects what
+ * was actually needed, so billing follows the indent. The screen
+ * shows the part that runs past the order because somebody will ask,
+ * not because anything is wrong.
  *
  * Bills run RA 1, RA 2, RA 3. The running total is held for them, and
  * a quantity cannot be billed twice.
@@ -44,10 +51,23 @@ export function Billing() {
   const { branchId } = useApp();
   const [params, setParams] = useSearchParams();
   const q = params.get('q') || '';
+  const client = params.get('client') || '';
+  const { data: clients } = useApi(
+    branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
   const { data, error, loading, reload } = useApi(
-    branchId ? `/bills/sites?branchId=${branchId}${q ? `&q=${encodeURIComponent(q)}` : ''}` : null,
-    [branchId, q]);
+    branchId
+      ? `/bills/sites?branchId=${branchId}${client ? `&clientId=${client}` : ''}`
+        + `${q ? `&q=${encodeURIComponent(q)}` : ''}`
+      : null,
+    [branchId, q, client]);
   const rows = data?.rows || [];
+
+  const set = (patch) => setParams((p) => {
+    for (const [k, v] of Object.entries(patch)) {
+      if (!v) p.delete(k); else p.set(k, v);
+    }
+    return p;
+  }, { replace: true });
 
   return (
     <>
@@ -59,13 +79,19 @@ export function Billing() {
         {error && <ErrorNote error={error} onRetry={reload} />}
 
         <Card>
-          <div className="pad">
-            <Field label="Find a site">
-              <input className="inp" style={{ width: 280 }} value={q} placeholder="By name"
-                onChange={(e) => setParams((p) => {
-                  if (e.target.value) p.set('q', e.target.value); else p.delete('q');
-                  return p;
-                }, { replace: true })} />
+          <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <Field label="Client">
+              <select className="inp" style={{ width: 230 }} value={client}
+                onChange={(e) => set({ client: e.target.value })}>
+                <option value="">Every client</option>
+                {(clients || []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Find a site" hint="By site name or client">
+              <input className="inp" style={{ width: 260 }} value={q}
+                placeholder="Type either" onChange={(e) => set({ q: e.target.value })} />
             </Field>
           </div>
         </Card>
@@ -253,10 +279,11 @@ export function BillingSheet() {
 
   const grab = () => downloadCsv(`billing-${data.site.code}`, [
     ['Sno', 'Description', 'Unit', 'BOQ quantity', 'Indented till date',
-      'Billed till date', 'Left to bill', 'Rate', 'Billing now', 'Amount'],
+      'Billed till date', 'Left to bill', 'Not indented for', 'Rate',
+      'Billing now', 'Amount'],
     ...lines.map((l) => [
       l.sno, l.description, l.uom, l.boq_qty, l.indented_qty, l.billed_qty,
-      l.to_bill_qty, l.rate, num(entry[l.wo_line_id]) || '',
+      l.to_bill_qty, l.unprovisioned_qty, l.rate, num(entry[l.wo_line_id]) || '',
       num(entry[l.wo_line_id]) ? num(entry[l.wo_line_id]) * Number(l.rate) : '',
     ]),
   ]);
@@ -277,10 +304,38 @@ export function BillingSheet() {
         <div className="stats">
           <Stat n={money(data.totals.contractValue)} label="contracted" />
           <Stat n={money(data.totals.billedValue)} label="billed to date" tone="ok" />
-          <Stat n={money(data.totals.toBillValue)} label="left to bill" tone="warn" />
+          <Stat n={money(data.totals.toBillValue)} label="can be billed now" tone="warn" />
+          <Stat n={money(data.totals.unprovisionedValue)} label="not indented for yet" />
           <Stat n={`${data.totals.billedPct}%`} label="of the work order" />
-          <Stat n={data.bills.filter((b) => b.status === 'RAISED').length} label="bills raised" />
         </div>
+
+        {Number(data.totals.overContractValue) > 0 && (
+          <Banner kind="info" icon="▸">
+            <b>{money(data.totals.overContractValue)}</b> beyond the work order has been
+            indented for, and is billable. A work order is written before the work is
+            measured, so the real requirement running past it is ordinary — this is here
+            to be seen, not to be fixed.
+          </Banner>
+        )}
+
+        {lines.some((l) => Number(l.over_billed_qty) > 0) && (
+          <Banner kind="bad" icon="!">
+            Some lines have been billed past what was indented for —{' '}
+            {lines.filter((l) => Number(l.over_billed_qty) > 0)
+              .map((l) => `line ${l.sno} by ${qty(l.over_billed_qty)} ${l.uom}`).join(', ')}.
+            Those bills are already with the client so nothing is undone here, but no more
+            can go on those lines until the material is indented for.
+          </Banner>
+        )}
+
+        {Number(data.totals.unprovisionedValue) > 0 && (
+          <Banner kind="info" icon="▸"
+            action={<Link className="btn sm" to={`/indents?site=${siteId}`}>Indents</Link>}>
+            <b>{money(data.totals.unprovisionedValue)}</b> of this work order has no material
+            indented for it, so it cannot be billed yet. Billing stops at whatever material
+            has been asked for.
+          </Banner>
+        )}
 
         {data.draft && (
           <Banner kind="warn" icon="✎"
@@ -314,7 +369,7 @@ export function BillingSheet() {
         </Card>
 
         <Card title="The work order, line by line"
-          sub="Quantities are the client's. Indented is what material has been provisioned for, shown in their units.">
+          sub="Quantities are the client's. A line bills up to what material has been indented for — past the agreed quantity too, if the indent went there.">
           <div className="tw">
             <table>
               <thead>
@@ -325,7 +380,7 @@ export function BillingSheet() {
                   <th className="rt" style={{ width: 100 }}>BOQ qty</th>
                   <th className="rt" style={{ width: 110 }}>Indented</th>
                   <th className="rt" style={{ width: 110 }}>Billed</th>
-                  <th className="rt" style={{ width: 100 }}>Left</th>
+                  <th className="rt" style={{ width: 120 }}>Left to bill</th>
                   <th className="rt" style={{ width: 100 }}>Rate</th>
                   <th className="rt" style={{ width: 125 }}>Billing now</th>
                   <th className="rt" style={{ width: 130 }}>Amount</th>
@@ -337,8 +392,14 @@ export function BillingSheet() {
                   const left = Number(l.to_bill_qty);
                   const bad = v > left + 0.0005;
                   const done = left <= 0.0005;
+                  // nothing left to bill means one of two things:
+                  // the whole agreed quantity is invoiced, or the
+                  // indent has run out
+                  const capped = Number(l.indented_qty) < Number(l.boq_qty);
+                  const fullyBilled = Number(l.billed_qty) >= Number(l.boq_qty) - 0.0005;
+                  const pastWo = Number(l.over_contract_qty) > 0;
                   return (
-                    <tr key={l.wo_line_id} style={done ? { opacity: 0.62 } : undefined}>
+                    <tr key={l.wo_line_id} style={done ? { opacity: 0.68 } : undefined}>
                       <td className="mono">{l.sno}</td>
                       <td>
                         <b>{l.description}</b>
@@ -349,17 +410,35 @@ export function BillingSheet() {
                         )}
                       </td>
                       <td>{l.uom}</td>
-                      <td className="rt mono"><b>{qty(l.boq_qty)}</b></td>
+                      <td className="rt mono">
+                        {qty(l.boq_qty)}
+                        {pastWo && (
+                          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
+                            +{qty(l.over_contract_qty)} indented
+                          </div>
+                        )}
+                      </td>
                       <td className="rt mono"
-                        title="Material provisioned for, in the client's units">
+                        title="Material indented for, in the client's units. This is the ceiling on what may be billed.">
                         {Number(l.indented_qty) > 0
-                          ? <span style={Number(l.indented_qty) < v
-                            ? { color: 'var(--warn)' } : undefined}>{qty(l.indented_qty)}</span>
+                          ? <b style={capped ? { color: 'var(--warn)' } : undefined}>
+                            {qty(l.indented_qty)}</b>
                           : <span style={{ color: 'var(--muted)' }}>—</span>}
                       </td>
-                      <td className="rt mono">{qty(l.billed_qty)}</td>
                       <td className="rt mono">
-                        {done ? <Tag kind="ok">done</Tag> : qty(left)}
+                        {qty(l.billed_qty)}
+                        {Number(l.over_billed_qty) > 0 && (
+                          <div style={{ color: 'var(--bad)', fontSize: 11 }}>
+                            {qty(l.over_billed_qty)} past the indent
+                          </div>
+                        )}
+                      </td>
+                      <td className="rt mono">
+                        {done
+                          ? (fullyBilled
+                            ? <Tag kind="ok">done</Tag>
+                            : <Tag kind="warn">indent more</Tag>)
+                          : <b>{qty(left)}</b>}
                       </td>
                       <td className="rt mono">{money(l.rate)}</td>
                       <td>
@@ -397,8 +476,10 @@ export function BillingSheet() {
           <Banner kind="bad" icon="!">
             {over.map((x) => (
               <div key={x.line.wo_line_id}>
-                Line {x.line.sno} — only {qty(x.line.to_bill_qty)} {x.line.uom} is left to
-                bill. Amend the BOQ first if more was actually done.
+                Line {x.line.sno} — only {qty(x.line.to_bill_qty)} {x.line.uom} can be
+                billed. Material has been indented for {qty(x.line.indented_qty)}
+                {' '}and {qty(x.line.billed_qty)} is already billed; indent the rest
+                before invoicing it.
               </div>
             ))}
           </Banner>
@@ -619,9 +700,14 @@ export function Bills() {
   const [tick, setTick] = useState(0);
   const status = params.get('status') || 'ALL';
   const q = params.get('q') || '';
+  const client = params.get('client') || '';
+  const { data: clients } = useApi(
+    branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
 
   const qs = new URLSearchParams({
-    ...(branchId ? { branchId } : {}), status, ...(q ? { q } : {}),
+    ...(branchId ? { branchId } : {}), status,
+    ...(client ? { clientId: client } : {}),
+    ...(q ? { q } : {}),
   }).toString();
   const { data, error, loading, reload } = useApi(
     branchId ? `/bills?${qs}` : null, [qs, tick]);
@@ -653,9 +739,18 @@ export function Bills() {
                 <option value="CANCELLED">Cancelled</option>
               </select>
             </Field>
-            <Field label="Find">
-              <input className="inp" style={{ width: 240 }} value={q}
-                placeholder="Document, site or reference"
+            <Field label="Client">
+              <select className="inp" style={{ width: 220 }} value={client}
+                onChange={(e) => set({ client: e.target.value })}>
+                <option value="">Every client</option>
+                {(clients || []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Find" hint="Bill number, site, client or their reference">
+              <input className="inp" style={{ width: 250 }} value={q}
+                placeholder="Type any of them"
                 onChange={(e) => set({ q: e.target.value })} />
             </Field>
           </div>

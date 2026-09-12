@@ -21,6 +21,16 @@ duplicate item name reads "Already in the master as WIR-0052", not
 `GET /masters/users?department=Site`
 `GET /masters/clients?branchId=1` · `POST /masters/clients`
 
+A client has to exist before a site can belong to one, and the only
+moment anybody notices one is missing is halfway through creating the
+site. So the picker adds to itself — `ClientPicker` in the UI offers
+"+ Add a client", takes a name, GSTIN and branch, and selects the new
+client when the dialog closes. Nothing typed into the site is lost.
+
+`POST /masters/clients` refuses a duplicate with `409` and returns the
+existing client's id in `detail.clientId`; the picker selects that one
+rather than making the user read an error and go looking for it.
+
 ## Items
 | | |
 |---|---|
@@ -734,12 +744,93 @@ names what is missing, and refuses to do the subtraction.
 revenue. When Billing exists this endpoint gains a revenue side and
 nothing else about it changes.
 
-The screen takes a site and nothing else — no date filter, because a
-window over nothing is still nothing — and shows one sentence saying
-that site has not been billed, with a way through to the expense
-report. It deliberately does not repeat the cost breakdown: that is
-the expense report's job, and showing a cost figure under the heading
-"profit and loss" invites somebody to read it as a loss.
+Since Billing exists, `available` is true wherever a bill has been
+raised, and the endpoint returns revenue, cost split three ways, gross
+profit and margin. Where nothing has been billed it still returns
+`available: false` and the screen shows one sentence saying so, with a
+way through to Billing and to the expense report — showing a cost
+figure under a heading that reads "profit and loss" invites somebody
+to read it as a loss.
+
+`orderValue` is the order book struck on the **amended** quantity, the
+same one billing works to. Using `work_order_lines.line_total` there
+is the original contract, and on an amended site it makes "not yet
+billed" come out negative.
+
+## Billing
+
+| | |
+|---|---|
+| `GET /bills/sites?branchId=` | sites with a work order, and how much of each is billed — `clientId`, or `q` for site or client name |
+| `GET /bills/sheet/:siteId` | the sheet — one row per work order line |
+| `POST /bills` | raise one (`raise: true`) or save a draft |
+| `PUT /bills/:id` | edit a draft |
+| `POST /bills/:id/raise` | a draft becomes revenue |
+| `POST /bills/:id/cancel` | a raised bill, with a reason |
+| `DELETE /bills/:id` | drafts only |
+| `GET /bills` · `GET /bills/:id` | the register, and one bill — `clientId`, or `q` for any of bill number / site / client / their reference |
+
+The first document here that earns money. It is raised against **work
+order lines**, not items: the client agreed to supply and install a
+hundred socket points, they did not agree to buy metal boxes. So the
+quantity is in their units, at their rate, against their wording, and
+the BOQ and indents sit underneath as evidence.
+
+Bills run RA 1, RA 2, RA 3 per site. `v_bill_line` carries
+`previous_qty` so a bill reads the way an RA bill is meant to — up to
+the last one, this one, to date — and `uq_bill_ra (site_id, ra_no)`
+means two people pressing Raise cannot take the same number.
+
+### What may be billed
+
+**One ceiling: what material has been indented for.** Work nobody has
+asked for material for has not been done, and invoicing it is how a
+running account bill gets thrown back.
+
+**The agreed quantity is not a second ceiling, and running past it is
+not an error.** A work order is written before the work is measured —
+the client is estimating their own requirement, and on this kind of
+job it goes over. The indent is what reflects what was actually
+needed, so the billing follows the indent.
+
+`over_contract_qty` names the part running past the order anyway,
+because somebody will ask how a line came to be billed at 115% of
+what was signed. The screen reports it plainly rather than as a
+warning.
+
+Indents are raised per **item** and a work order line is not an item —
+it is 100 socket points, each needing one box and two plates. So
+`v_wo_line_indented` translates into the client's units by taking the
+**least-provisioned item**: boxes in for 80 points and plates for only
+60 means 60 points, not 80.
+
+Every line satisfies
+
+```
+agreed + past the order  =  billed + can be billed + waiting on material
+```
+
+The fourth term exists because the indent may run past what the client
+signed, and when it does that work is billable but is not part of the
+contract value. `unprovisioned_qty` is measured from whichever of
+indented/billed has got further, rather than from the agreed quantity:
+the two look equivalent and are not, and a line billed past its indent
+— which happens, and did before this rule existed — would otherwise
+count the same work twice and the row would not add up.
+`over_billed_qty` names that condition instead of hiding it; the bills
+are with the client, so nothing is undone, but no more goes on until
+the material is asked for.
+
+### Revenue
+
+`v_site_revenue` is raised bills and nothing else. Not the work order,
+which is an agreement. Not a draft, which is a working note. That view
+is what gives `GET /costs/pl` its revenue side, and the moment RA 1 is
+raised the profit and loss stops saying it cannot exist.
+
+A cancelled bill stops counting, and what it billed becomes free to
+bill again. Bills come off in the order they went on — cancelling RA 2
+before RA 3 — so the running total can never be reconstructed wrongly.
 
 ## Progress
 | | |

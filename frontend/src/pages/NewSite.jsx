@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { api, money, qty, today, ApiError } from '../api';
-import { useApi, Card, Field, Banner, Empty, useToast } from '../components/ui';
+import { useApi, Card, Field, Banner, Empty, useToast, ClientPicker } from '../components/ui';
 
 /**
  * Creating a site is two steps because that is how it happens: agree
@@ -22,7 +22,7 @@ const blankLine = (uom) => ({ description: '', uom, qty: '', supplyRate: '', ins
 const lineTotal = (l) => (Number(l.qty) || 0) * ((Number(l.supplyRate) || 0) + (Number(l.instRate) || 0));
 
 export default function NewSite() {
-  const { branchId, users } = useApp();
+  const { branchId, branches, users } = useApp();
   const nav = useNavigate();
   const toast = useToast();
   const fileRef = useRef(null);
@@ -132,10 +132,9 @@ export default function NewSite() {
                 </Field>
                 <div className="row2">
                   <Field label="Client">
-                    <select className="inp" value={p.clientId} onChange={set('clientId')}>
-                      <option value="">— choose the client —</option>
-                      {(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <ClientPicker value={p.clientId} branchId={branchId} branches={branches}
+                      width={250}
+                      onChange={(v) => setP((x) => ({ ...x, clientId: v }))} />
                   </Field>
                   <Field label="Client work order no.">
                     <input className="inp" value={p.clientWoNo} onChange={set('clientWoNo')}
