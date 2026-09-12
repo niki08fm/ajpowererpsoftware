@@ -22,6 +22,8 @@ const TABLES = [
   'comparison_indents', 'comparisons',
   'supplier_makes', 'suppliers',
   // site
+  'site_expense_events', 'site_expenses',
+  'stock_return_lines', 'stock_returns',
   'consumption_lines', 'consumptions',
   'indent_events', 'indent_lines', 'indents',
   // planning

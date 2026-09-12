@@ -23,7 +23,7 @@ import { DocLink, DocPeek } from './Store';
  */
 
 /** Every site screen needs to know which site. */
-function useSite() {
+export function useSite() {
   const { branchId } = useApp();
   const [params, setParams] = useSearchParams();
   const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);

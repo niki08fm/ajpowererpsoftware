@@ -54,11 +54,12 @@ Everything else has a working default.
 ```bash
 cd backend
 npm run db:reset     # DROPS your database and rebuilds it empty
-npm test             # 45 tests
+npm test             # 168 tests
 ```
 
 `npm test` builds and uses its own database, `ajp_erp_test`. It deletes
-every site, work order, BOQ and indent before it runs, so it refuses to
+every site, work order, BOQ, indent, issue, return and expense before
+it runs, so it refuses to
 start against any database whose name does not end in `_test`. Your
 working data is never touched.
 
@@ -70,7 +71,30 @@ in your `.env`.
 **Planning** — sites, stores, the site team, work orders (with the
 client's spreadsheet droppable straight in), and the BOQ.
 
-**Site** — indents and consumption.
+**Site** — indents, acknowledgements, the site's own store, and the
+material it spends: issuing to a person, and taking back what was not
+used.
+
+Site also carries the three screens you reach for while working:
+every transaction with filters, an audit that answers either
+"everywhere this item has been" or "everything this person has had",
+and consumption — net consumed, issued less returned, for a single day
+or any window.
+
+Site also raises **expenses** — money it spends that never touches a
+shelf. Those are claimed at site and approved elsewhere, in full or in
+part, and only what is approved ever counts.
+
+No other screen under Site shows a rate or a value. A site bought none
+of that material and has no price to quote. Every document still
+stamps what the central store was holding the item at on the day it
+moved, and keeps it.
+
+**Reports** — the expense report: material consumed plus approved
+expenses, for one site or all of them, over any window, with the
+running total to date. And a profit and loss that declines to exist,
+because nothing has been billed to a client yet and cost minus an
+agreement is not profit.
 
 The thread runs: work order line → BOQ lines (1a, 1b, 1c) → indented →
 used. For any BOQ line you can ask what was estimated, what's been

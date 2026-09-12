@@ -24,5 +24,9 @@ router.use('/store',       require('../modules/store.routes'));
 router.use('/challans',    require('../modules/challans.routes'));
 router.use('/grns',        require('../modules/grn.routes'));
 router.use('/site-store',  require('../modules/sitestore.routes'));
+router.use('/consumption', require('../modules/consumption.routes'));
+router.use('/tracking',    require('../modules/tracking.routes'));
+router.use('/expenses',    require('../modules/expenses.routes'));
+router.use('/costs',       require('../modules/costs.routes'));
 
 module.exports = router;

@@ -457,6 +457,290 @@ several PRNs, one challan line answering several — is rounded to three
 decimals, the precision quantities are stored at. 35 sent against a
 15/20 split is 15 and 20, not 14.999999.
 
+## Consumption — issue and return
+
+| | |
+|---|---|
+| `POST /consumption/issues` | issue material to a person; confirmed at once |
+| `GET /consumption/issues` | the register — `siteId` `person` `itemId` `from` `to` `q` |
+| `GET /consumption/issues/:id` | one slip, its lines and anything returned against it |
+| `POST /consumption/returns` | material back on the shelf, cost reversed |
+| `GET /consumption/returns` | the return register, same filters |
+| `GET /consumption/returns/:id` | one return and its lines |
+| `GET /consumption/issuable/:siteId` | what this site holds, priced the way an issue will price it |
+| `GET /consumption/returnable/:siteId` | what one person took and has not brought back — `?person=` |
+| `GET /consumption/people/:siteId` | names this site has issued to; `?outstanding=true` for only those still holding something |
+
+This is the last hop. Everything before it moves material between
+places that are answerable for it; this moves it into a person's
+hands, which is where it stops being stock and becomes cost.
+
+**An issue names an item, not a BOQ line.** Asking a storekeeper which
+BOQ line a coil of wire belongs to, while somebody stands in front of
+him waiting for it, is how you get a system nobody uses.
+`consumption_lines.boq_line_id` is kept and NULL-able so that link can
+be switched on later without moving any data — until it is, a BOQ
+line's `consumed_qty` counts only rows that carry one.
+
+**An issue names a person by hand.** There is no site login yet and
+the people drawing material are often not system users at all.
+`issued_to_user_id` is reserved for when site attendance arrives; the
+typed name is the record, and it is what the audit searches on.
+`GET /consumption/people/:siteId` exists so the second issue to Ramesh
+is a click rather than a fresh spelling.
+
+**The costing rule.** A day's cost for an item is that day's *net*
+quantity — issued less returned — times what the central store was
+holding that item at *on that day*. Cost to date is those days added
+up. Two switches out and one back on a ten-rupee day is ₹10; ten out
+and four back on an eleven-rupee day is ₹66.
+
+Both sides of a day are therefore struck at the same price. A return
+is *not* credited at what the material went out at last month — it is
+credited at today's rate, exactly as an issue is charged at today's
+rate.
+
+**Rates are stamped, not looked up.** This is the one place the schema
+writes down a number it could derive, deliberately: the line carries
+the rate that was in force when it moved. An expense report whose past
+changes every time the store buys cable at a new price is not a report.
+
+And "in force when it moved" means as at the *document's* date, not as
+at now. A slip written up late and dated last Tuesday prices at last
+Tuesday's rate — otherwise backdating silently reprices it. Every
+lookup in `lib/rates.js` is bounded by the asking document's date, and
+`GET /consumption/issuable/:siteId?asOf=` quotes the same number the
+save will stamp, so the screen never shows one price and record
+another.
+
+`lib/rates.js` looks in four places, in the order a storekeeper would —
+the branch's central store, any store in the branch, what this site was
+last charged on the way in, then the item master — each bounded by that
+date.
+
+**A return answers to a person, not a document.** Nobody can tell you
+which slip material left on days later; asking means they pick the
+first one in the list and the link looks authoritative while being
+wrong. So the handle is the person.
+
+And on the way back nothing is typed. Issuing takes a typed name,
+because the man drawing material may be nobody the system has heard
+of. Returning does not: by then the system recorded exactly who it
+went to, so `?outstanding=true` lists the people actually holding
+something and the screen makes you pick one. A name that is not on
+that list has nothing to return, and no amount of typing should
+conjure one.
+
+The return side shows no money at all. The cost comes off at the
+central store's rate on the day it comes back, worked out behind the
+screen and never surfaced on it. A man handing back a coil of wire has
+no opinion about its price. `outstanding()` is the quantity cap only;
+it prices nothing.
+
+**Issued and not returned is consumed.** Nothing calls it an
+outstanding balance, because it is not one — material put into
+somebody's hands has been used, and that is what issuing it means. The
+screens say "consumed". `v_person_outstanding.open_qty` exists only to
+cap a return so it cannot invent stock that never left, and is a
+mechanic rather than a figure anyone is shown.
+
+**Neither document can invent stock.** An issue is refused for more
+than the site is holding, checked inside the transaction. A return is
+refused for more than the named person took and has not brought
+back.
+
+`v_consumption_event` puts both documents on one signed ledger, issues
+positive and returns negative, and is what the tracking screens and
+the expense report read. `v_site_consumption` sums it per site and
+item.
+
+## Tracking — transactions, audit, consumption
+
+| | |
+|---|---|
+| `GET /tracking/transactions` | every movement, filtered — `siteId` `kind` `direction` `siteType` `itemId` `person` `from` `to` `q` `sort` |
+| `GET /tracking/transactions/kinds` | the kinds actually present, so the filter offers only real options |
+| `GET /tracking/audit/item/:itemId` | one item: every movement, where it is standing, and who has had it |
+| `GET /tracking/audit/people` | everyone who has drawn material, ranked |
+| `GET /tracking/audit/person?name=` | one person: every line with its date, folded by item, plus the spellings the search swept up |
+| `GET /tracking/consumed` | issued less returned by item, over a window, with a series for the chart |
+
+Three screens, one ledger, all three under Site — they are what a site
+team reaches for while working.
+
+**None of them shows money, and all of them carry it.** Every response
+here has `rate` and `value` on it, because the expense report is built
+from exactly these rows and splitting the query would let the two
+drift. The screens simply do not render them: a site bought none of
+this material and has no price to quote, so putting a value column in
+front of a storekeeper starts an argument nobody there can settle.
+The `series` carries `running_qty` and `running_value` for the same
+reason — one series, whichever the caller plots. `v_consumption_event` has issues positive
+and returns negative, so every one of these is the same rows sliced
+differently — which is the only way three screens can be relied on to
+agree. `/tracking/transactions` is the exception and reads
+`v_stock_movement` instead, because "what happened to this material"
+includes the receipt and the challan that brought it here, not only
+what was spent.
+
+**A balance is as at today**, whatever date window is set. Asking what
+an item did last September and what is on the shelf right now are two
+different questions, and answering the second one "as at September"
+would be a stock figure nobody could act on.
+
+**`/tracking/consumed` answers both "in this window" and "to date".**
+`beforeWindowValue` is everything consumed before `from`, so
+`toDateValue` is the real running total no matter how narrow the
+window. The `series` carries `running_value` down its length, and its
+last point equals `consumedValue` — tested, because a chart whose line
+does not land on the number beside it is worse than no chart.
+
+**Names are typed, so the audit tells you what it swept up.**
+`spellings` lists every distinct name a loose search matched, with a
+count. Case is folded by the database's collation, so "ramesh kumar"
+and "Ramesh Kumar" are one person; a genuinely different spelling
+("R Kumar") shows as its own row rather than being silently added in.
+`exact=true` matches the whole name instead.
+
+## Expenses
+
+| | |
+|---|---|
+| `GET /expenses/categories` | the list of kinds; `POST` adds one |
+| `POST /expenses` | claim one — `send: true` puts it straight in the queue |
+| `PUT /expenses/:id` | edit a draft or one that was sent back |
+| `POST /expenses/:id/submit` | send it for approval |
+| `POST /expenses/:id/withdraw` | pull it back out of the queue |
+| `POST /expenses/:id/decide` | `APPROVED` (with an `amount` to cut it), `REJECTED`, `RETURNED` |
+| `GET /expenses` | the register — `siteId` `categoryId` `status` `from` `to` `q` |
+| `GET /expenses/:id` | one claim and everything that happened to it |
+
+Money a site spends that never touches a shelf. A quantity of cable
+can be checked against a shelf; a claim for ₹4,000 of transport can
+only be checked by somebody who knows whether that lorry ran — which
+is why this is the one site document that needs approving.
+
+**Two amounts, kept apart.** `claimed_amount` is what the site asked
+for and `approved_amount` is what was allowed. Only the second ever
+reaches a cost figure. Cutting ₹4,000 to ₹3,200 is one document
+carrying both numbers, not a rejection followed by a fresh claim, so
+"how much of what sites asked for was granted" stays answerable —
+`v_site_expense` derives `outcome` (`APPROVED` / `PART_APPROVED` /
+`NIL_APPROVED`) and `disallowed_amount` from them rather than storing
+either.
+
+`approved_amount` is NULL until somebody decides, never 0. A claim
+nobody has looked at is not the same as one refused. The schema
+refuses an approval above the claim — cutting a claim down is an
+approval, adding to it is a different document — and the API refuses
+a cut, a refusal or a send-back with no reason, because the site is
+going to ask and "the system does not say" is not an answer.
+
+There are no permission checks, here or anywhere else in this system
+yet. Who may approve is a decision nobody has taken. What the document
+records is who *did* decide, which is the part that has to be true
+whenever the rules arrive.
+
+## Cost and P&L
+
+| | |
+|---|---|
+| `GET /costs/expense/statement` | the report as a statement: material item by item, then labour, then everything else, then one total |
+| `GET /costs/expense` | the same numbers shaped for charts — series, category and site splits |
+| `GET /costs/expense/lines` | every line behind it |
+| `GET /costs/pl` | the half of a profit and loss that can be answered |
+
+### The statement
+
+`GET /costs/expense/statement` returns the shape every cost statement
+in this trade has, and it is what both the screen and the download
+use:
+
+```
+MATERIAL CONSUMED     one row per item — net quantity and amount
+  Total material
+LABOUR                one row per approved claim, with the comments on it
+  Total labour
+OTHER EXPENSES        the same, grouped by what they were for
+  Total other
+TOTAL
+```
+
+**There is no rate on the material rows, and that is deliberate.** An
+item is priced at what the central store held it at on the day it
+moved, so one that moved on several days has several rates. Dividing
+the amount by the quantity would give an average that was never the
+price of anything — cable out on Monday at 10 and Tuesday at 13 is
+not cable at 11.50 — and printing that under a heading saying "rate"
+invites somebody to multiply it back out and get a different figure
+from the one beside it. The quantity is exact, the amount is exact,
+and `days` says how many days the item moved on. A single rate is not
+available, so none is offered.
+
+Nor is there an issued-and-returned breakdown. The reader of a cost
+statement wants what was used and what it cost; what went out and
+came back is a stores question, and the Site screens answer it.
+
+Material is listed **per item**, not per issue: "what did the cable
+cost" is the question, and forty slips is not an answer to it. Every
+other section is listed **per claim**, because there the document is
+the answer — somebody asked for money, and the reader wants to see
+what for, on whose site, and what was written against it.
+
+Each claim row carries `note` (what the site wrote when it raised it)
+and `decision_note` (what the approver wrote back), beside
+`claimed_amount` and `cost_amount`. A claim cut from ₹9,000 to ₹7,500
+shows both figures and the reason on the same line, which is the
+whole point of keeping them apart.
+
+Labour is sectioned off `expense_categories.kind`, not off the
+category's name. A business that decides tomorrow that hire charges
+are really labour moves one row rather than editing a query.
+
+`v_cost_event` is the one ledger. Material rows come from
+`v_consumption_event` — issues positive, returns negative, at the rate
+stamped on each line, so a day's material cost is that day's net
+quantity at that day's central store rate. Expense rows come from
+approved claims at the amount allowed. Sum it for a window and that is
+what the work cost; there is no second place where either number is
+worked out differently.
+
+**Nothing unapproved is counted**, and the report says so rather than
+staying silent: `pending` carries the claims sitting in a queue, their
+value and how long the oldest has waited, kept out of every total.
+
+**A window knows what came before it.** `beforeWindow` is everything
+up to the start date, so `toDate` is a real running total however
+narrow the window, and the chart's line starts where the previous one
+finished instead of at zero. The last point of `series.running_value`
+equals `totals.total` — tested, because a line that does not land on
+the number beside it is worse than no chart.
+
+### Why there is no profit and loss
+
+`GET /costs/pl` returns `available: false` and `blockedBy: "BILLING"`,
+and nothing in its response is called revenue or profit.
+
+Cost is known to the rupee. Revenue is not known at all. The only
+figure this system holds on the income side is the work order — what a
+client *agreed* to pay — and that is not revenue: it has not been
+invoiced, nothing has been received against it, and the quantities
+actually executed will differ from the ones agreed. Subtracting cost
+from an agreement is how a business persuades itself it is profitable
+while running out of money, so the endpoint reports the cost it knows,
+names what is missing, and refuses to do the subtraction.
+
+`orderValue` is returned for scale and is deliberately not named
+revenue. When Billing exists this endpoint gains a revenue side and
+nothing else about it changes.
+
+The screen takes a site and nothing else — no date filter, because a
+window over nothing is still nothing — and shows one sentence saying
+that site has not been billed, with a way through to the expense
+report. It deliberately does not repeat the cost breakdown: that is
+the expense report's job, and showing a cost figure under the heading
+"profit and loss" invites somebody to read it as a loss.
+
 ## Progress
 | | |
 |---|---|

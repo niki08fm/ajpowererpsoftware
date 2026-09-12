@@ -15,6 +15,10 @@ import { Comparisons, ComparisonDetail } from './pages/Comparisons';
 import { StoreDesk, Prns, IssueSheet, Stock, Movements } from './pages/Store';
 import { Grns, GrnRegister, GrnDetail } from './pages/Grns';
 import { SiteInbox, SiteStock } from './pages/SiteStore';
+import { IssueStock, ReturnStock } from './pages/Consumption';
+import { Transactions, Audit, Consumed } from './pages/Tracking';
+import Expenses from './pages/Expenses';
+import { ExpenseReport, ProfitLoss } from './pages/Reports';
 import { Challans, ChallanDetail } from './pages/Challans';
 import BoqList from './pages/BoqList';
 import Indents from './pages/Indents';
@@ -28,9 +32,14 @@ export const useApp = () => useContext(AppCtx);
  * The rail picks a department, the tab bar picks the screen within it —
  * the same two-level structure the prototype settled on.
  *
- * Planning, Site, Store and Procure exist. Billing and Accounts come
- * later; they are not stubbed here, because an empty screen is worse
- * than no screen.
+ * Planning, Site, Store, Procure and Reports exist. Billing and
+ * Accounts come later; they are not stubbed here, because an empty
+ * screen is worse than no screen.
+ *
+ * Everything a site team asks while working lives under Site, and
+ * none of it shows money — a site bought nothing and has no price to
+ * quote. The rates are stamped on every document and kept; the
+ * expense report, when Reports opens, is what answers for them.
  */
 export const SECTIONS = [
   {
@@ -52,6 +61,12 @@ export const SECTIONS = [
       { to: '/indents', label: 'Indents', badge: 'indentsWaiting' },
       { to: '/site/inbox', label: 'Acknowledgements' },
       { to: '/site/stock', label: 'Site store' },
+      { to: '/site/issue', label: 'Issue material' },
+      { to: '/site/returns', label: 'Returns' },
+      { to: '/site/transactions', label: 'Transactions' },
+      { to: '/site/audit', label: 'Audit' },
+      { to: '/site/consumption', label: 'Consumption' },
+      { to: '/site/expenses', label: 'Expenses', badge: 'expensesWaiting' },
     ],
   },
   {
@@ -65,6 +80,15 @@ export const SECTIONS = [
       { to: '/challans', label: 'Challans' },
       { to: '/stock', label: 'Stock' },
       { to: '/movements', label: 'Movement' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'Reports',
+    icon: '\u2637',
+    screens: [
+      { to: '/reports/expense', label: 'Expense report' },
+      { to: '/reports/pl', label: 'Profit and loss' },
     ],
   },
   {
@@ -88,7 +112,6 @@ export const SECTIONS = [
 export const SOON = [
   { id: 'billing',  label: 'Billing',  icon: '\u20B9' },
   { id: 'accounts', label: 'Accounts', icon: '\u25CE' },
-  { id: 'reports',  label: 'Reports',  icon: '\u2637' },
 ];
 
 const sectionFor = (pathname) =>
@@ -102,6 +125,7 @@ function Shell({ children }) {
   const counts = {
     amendmentDue: desk?.amendmentDue?.length || 0,
     indentsWaiting: desk?.indentsWaiting?.length || 0,
+    expensesWaiting: desk?.expensesWaiting || 0,
   };
 
   return (
@@ -284,6 +308,21 @@ export default function App() {
               <Route path="/challans/:id" element={<ChallanDetail />} />
               <Route path="/site/inbox" element={<SiteInbox />} />
               <Route path="/site/stock" element={<SiteStock />} />
+              <Route path="/site/issue" element={<IssueStock />} />
+              <Route path="/site/returns" element={<ReturnStock />} />
+              <Route path="/site/transactions" element={<Transactions />} />
+              <Route path="/site/audit" element={<Audit />} />
+              <Route path="/site/consumption" element={<Consumed />} />
+              <Route path="/site/expenses" element={<Expenses />} />
+              <Route path="/reports/expense" element={<ExpenseReport />} />
+              <Route path="/reports/pl" element={<ProfitLoss />} />
+              {/* these lived under Reports for a day; keep the links working */}
+              <Route path="/reports" element={<Navigate to="/reports/expense" replace />} />
+              <Route path="/reports/consumption"
+                element={<Navigate to="/site/consumption" replace />} />
+              <Route path="/reports/transactions"
+                element={<Navigate to="/site/transactions" replace />} />
+              <Route path="/reports/audit" element={<Navigate to="/site/audit" replace />} />
               <Route path="/procurement" element={<Procurement />} />
               <Route path="/comparisons" element={<Comparisons />} />
               <Route path="/comparisons/:id" element={<ComparisonDetail />} />

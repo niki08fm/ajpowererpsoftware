@@ -97,7 +97,20 @@ router.get('/desk',
          FROM indents i JOIN sites s ON s.id = i.site_id
         WHERE i.status = 'SUBMITTED' ${w} ORDER BY i.created_at`, p);
 
-    res.json({ amendmentDue, awaitingBoq, boqDrafts, indentsWaiting: submitted });
+    // claims nobody has decided. Not a cost until somebody does, so
+    // they belong on a desk rather than in a report.
+    const expenses = await one(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(claimed_amount), 0) AS amount,
+              COALESCE(MAX(days_waiting), 0) AS oldest
+         FROM v_site_expense WHERE (? IS NULL OR branch_id = ?) AND status = 'SUBMITTED'`,
+      [bId || null, bId || null]);
+
+    res.json({
+      amendmentDue, awaitingBoq, boqDrafts, indentsWaiting: submitted,
+      expensesWaiting: Number(expenses.n),
+      expensesWaitingValue: Number(expenses.amount),
+      expensesOldestDays: Number(expenses.oldest),
+    });
   })
 );
 
