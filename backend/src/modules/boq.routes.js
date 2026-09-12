@@ -109,8 +109,16 @@ router.post('/prepare',
 router.get('/:id', wrap(async (req, res) => {
   const boq = await loadBoq(req.params.id);
   const woLines = await many(
-    `SELECT wol.id AS wo_line_id, wol.sno, wol.description, u.code AS uom, wol.qty,
-            bwl.id AS boq_wo_line_id, COALESCE(bwl.est_qty, 0) AS est_qty
+    // qty is the effective quantity — contracted plus whatever an
+    // amendment has moved it by — so the preparation sheet and the
+    // amend sheet can never show two numbers for the same line
+    `SELECT wol.id AS wo_line_id, wol.sno, wol.description, u.code AS uom,
+            wol.qty AS contracted_qty,
+            COALESCE(bwl.var_qty, 0) AS var_qty,
+            (wol.qty + COALESCE(bwl.var_qty, 0)) AS qty,
+            bwl.id AS boq_wo_line_id,
+            COALESCE(bwl.est_qty, 0) AS contracted_est,
+            (COALESCE(bwl.est_qty, 0) + COALESCE(bwl.var_qty, 0)) AS est_qty
        FROM work_order_lines wol
        JOIN uoms u ON u.id = wol.uom_id
        LEFT JOIN boq_wo_lines bwl ON bwl.wo_line_id = wol.id AND bwl.boq_id = ?
@@ -257,6 +265,42 @@ router.post('/:id/submit',
 );
 
 /* --------------------------------------------------------- amendment */
+/**
+ * An amendment is typed against a WORK ORDER LINE, not against each
+ * item. One number, and every item under it recomputes on the same
+ * formula preparation uses:
+ *
+ *     boq_qty = item_qty x (contracted qty + amendment)
+ *     est_qty = item_qty x (contracted est + amendment)
+ *
+ * The client's work_order_lines.qty is never touched. The amendment
+ * accumulates on boq_wo_lines.var_qty, so the sheet can always show
+ * what was contracted next to what it now stands at.
+ */
+
+/** The amend sheet: the BOQ exactly as preparation shows it. */
+router.get('/:id/amend-sheet', wrap(async (req, res) => {
+  const boq = await loadBoq(req.params.id);
+  const woLines = await many(
+    `SELECT * FROM v_boq_wo_line WHERE boq_id = ? ORDER BY sno`, [boq.id]);
+  const items = await many(
+    `SELECT s.*, bl.boq_wo_line_id, bl.est_manual
+       FROM v_boq_line_status s
+       JOIN boq_lines bl ON bl.id = s.boq_line_id
+      WHERE s.boq_id = ? ORDER BY s.sno`, [boq.id]);
+
+  res.json({
+    boqId: boq.id, docNo: boq.doc_no, state: boq.state,
+    site: { id: boq.site_id, name: boq.site_name, code: boq.site_code },
+    workOrder: { docNo: boq.wo_doc_no, clientWoNo: boq.client_wo_no },
+    policy: { overAllow: !!boq.over_allow, overPct: boq.over_pct },
+    woLines: woLines.map((w) => ({
+      ...w,
+      items: items.filter((i) => i.boq_wo_line_id === w.boq_wo_line_id),
+    })),
+  });
+}));
+
 /** Which lines have been indented past their estimate. */
 router.get('/:id/over-lines', wrap(async (req, res) => {
   const boq = await loadBoq(req.params.id);
@@ -267,63 +311,211 @@ router.get('/:id/over-lines', wrap(async (req, res) => {
 }));
 
 /**
- * Record a variation quantity. This is what takes a BOQ out of
- * AMENDMENT_DUE: the estimate moves up to cover what was already
- * indented, and the trail says who moved it and why.
+ * Preview: what the sheet becomes if these amendments are recorded.
+ * Saves nothing. The screen can show the new quantities beside the
+ * present ones before anyone commits to them.
  */
-router.post('/:id/amendments',
-  validate(z.object({
-    reason: z.string().trim().min(5).max(500),
-    lines: z.array(z.object({
-      boqLineId: z.coerce.number().int().positive(),
-      qty: z.coerce.number().positive(),
-    })).min(1),
-  })),
-  wrap(async (req, res) => {
-    const boq = await loadBoq(req.params.id);
-    if (boq.status !== 'LOCKED') throw badRequest('Only a locked BOQ can be amended');
+const amendBody = z.object({
+  reason: z.string().trim().min(5).max(500),
+  lines: z.array(z.object({
+    boqWoLineId: z.coerce.number().int().positive(),
+    // a cut is allowed; nothing is a no-op
+    qty: z.coerce.number().refine((n) => n !== 0, 'A variation of nothing is not a variation'),
+  })).min(1),
+});
 
-    const out = await tx(async (conn) => {
-      const am = await run(
-        `INSERT INTO boq_amendments (boq_id, reason, created_by) VALUES (?, ?, ?)`,
-        [boq.id, req.body.reason, req.user?.id || null], conn
+/** Work out the new numbers. Used by the preview and by the save. */
+async function projectAmendment(conn, boq, lines) {
+  const out = [];
+  for (const l of lines) {
+    const w = await one(
+      `SELECT * FROM v_boq_wo_line WHERE boq_wo_line_id = ? AND boq_id = ?`,
+      [l.boqWoLineId, boq.id], conn
+    );
+    if (!w) throw badRequest('One of those lines is not on this BOQ');
+
+    const newQty = round3(Number(w.effective_qty) + l.qty);
+    const newEst = round3(Number(w.effective_est) + l.qty);
+    if (newQty <= 0) {
+      throw badRequest(
+        `Line ${w.sno} stands at ${w.effective_qty}; a cut of ${Math.abs(l.qty)} would leave nothing.`,
+        { boqWoLineId: w.boq_wo_line_id }
       );
-      for (const l of req.body.lines) {
-        const line = await one(
-          `SELECT id FROM boq_lines WHERE id = ? AND boq_id = ? FOR UPDATE`,
-          [l.boqLineId, boq.id], conn
-        );
-        if (!line) throw badRequest('One of those lines is not on this BOQ');
-        await run(`INSERT INTO boq_amendment_lines (amendment_id, boq_line_id, qty) VALUES (?, ?, ?)`,
-          [am.insertId, l.boqLineId, l.qty], conn);
-        await run(`UPDATE boq_lines SET var_qty = var_qty + ? WHERE id = ?`, [l.qty, l.boqLineId], conn);
-      }
-      await run(`UPDATE boqs SET amended_on = CURDATE() WHERE id = ?`, [boq.id], conn);
-      await log(conn, {
-        entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no, action: 'Amended',
-        detail: `${req.body.lines.length} line(s) given a variation · ${req.body.reason}`, user: req.user,
-      });
-      return am.insertId;
+    }
+
+    const kids = await many(
+      `SELECT s.*, bl.item_qty AS iq, bl.est_manual, bl.est_qty AS own_est
+         FROM v_boq_line_status s
+         JOIN boq_lines bl ON bl.id = s.boq_line_id
+        WHERE bl.boq_wo_line_id = ? ORDER BY s.sno`, [l.boqWoLineId], conn
+    );
+    const items = kids.map((k) => {
+      const iq = Number(k.iq);
+      const newVar = round3(iq * (Number(w.var_qty) + l.qty));
+      const newBoqQty = round3(iq * newQty);
+      const newEffEst = round3(Number(k.own_est) + newVar);
+      return {
+        boqLineId: k.boq_line_id, sno: k.sno,
+        itemCode: k.item_code, itemName: k.item_name, uom: k.uom,
+        itemQty: iq, estManual: !!k.est_manual,
+        boqQty: Number(k.boq_qty), newBoqQty,
+        effectiveEst: Number(k.effective_est), newEffectiveEst: newEffEst,
+        committed: Number(k.committed_qty),
+        newVarQty: newVar,
+        // a cut can leave a line holding more than it is now estimated for
+        goesOver: round3(Math.max(0, Number(k.committed_qty) - newEffEst)),
+      };
     });
 
-    const status = await one(`SELECT state, over_line_count FROM v_boq_status WHERE boq_id = ?`, [boq.id]);
-    res.status(201).json({ amendmentId: out, state: status.state, overLines: status.over_line_count });
-  })
-);
+    out.push({
+      boqWoLineId: w.boq_wo_line_id, sno: w.sno, description: w.description, uom: w.uom,
+      contractedQty: Number(w.contracted_qty), varQty: Number(w.var_qty),
+      fromQty: Number(w.effective_qty), amendBy: l.qty, toQty: newQty,
+      fromEst: Number(w.effective_est), toEst: newEst,
+      items,
+    });
+  }
+  return out;
+}
 
+router.post('/:id/amendments/preview', validate(amendBody), wrap(async (req, res) => {
+  const boq = await loadBoq(req.params.id);
+  if (boq.status !== 'LOCKED') throw badRequest('Only a locked BOQ can be amended');
+  const lines = await projectAmendment(null, boq, req.body.lines);
+  const over = lines.flatMap((w) => w.items.filter((i) => i.goesOver > 0));
+  res.json({ lines, goesOver: over });
+}));
+
+router.post('/:id/amendments', validate(amendBody), wrap(async (req, res) => {
+  const boq = await loadBoq(req.params.id);
+  if (boq.status !== 'LOCKED') throw badRequest('Only a locked BOQ can be amended');
+
+  const out = await tx(async (conn) => {
+    // lock the work order lines first so two amendments cannot both
+    // read the same var_qty and each add to it
+    for (const l of req.body.lines) {
+      await one(`SELECT id FROM boq_wo_lines WHERE id = ? AND boq_id = ? FOR UPDATE`,
+        [l.boqWoLineId, boq.id], conn);
+    }
+    const projected = await projectAmendment(conn, boq, req.body.lines);
+
+    const am = await run(
+      `INSERT INTO boq_amendments (boq_id, reason, created_by) VALUES (?, ?, ?)`,
+      [boq.id, req.body.reason, req.user?.id || null], conn
+    );
+
+    for (const w of projected) {
+      await run(
+        `INSERT INTO boq_amendment_lines (amendment_id, boq_wo_line_id, qty, from_qty, to_qty)
+         VALUES (?, ?, ?, ?, ?)`,
+        [am.insertId, w.boqWoLineId, w.amendBy, w.fromQty, w.toQty], conn
+      );
+      await run(`UPDATE boq_wo_lines SET var_qty = var_qty + ? WHERE id = ?`,
+        [w.amendBy, w.boqWoLineId], conn);
+      // every item under the line recomputed, not incremented, so
+      // amending the same line twice cannot drift
+      for (const i of w.items) {
+        await run(`UPDATE boq_lines SET boq_qty = ?, var_qty = ? WHERE id = ?`,
+          [i.newBoqQty, i.newVarQty, i.boqLineId], conn);
+      }
+    }
+
+    await run(`UPDATE boqs SET amended_on = CURDATE() WHERE id = ?`, [boq.id], conn);
+    await log(conn, {
+      entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no, action: 'Amended',
+      detail: `${projected.map((w) => `line ${w.sno} ${w.fromQty}→${w.toQty}`).join(', ')} · ${req.body.reason}`,
+      user: req.user,
+    });
+    return { id: am.insertId, projected };
+  });
+
+  const status = await one(`SELECT state, over_line_count FROM v_boq_status WHERE boq_id = ?`, [boq.id]);
+  res.status(201).json({
+    amendmentId: out.id,
+    lines: out.projected.map((w) => ({ sno: w.sno, from: w.fromQty, to: w.toQty, items: w.items.length })),
+    state: status.state,
+    overLines: status.over_line_count,
+  });
+}));
+
+/** The trail: one entry per amendment, with the lines it moved. */
 router.get('/:id/amendments', wrap(async (req, res) => {
   const boq = await loadBoq(req.params.id);
-  const rows = await many(
-    `SELECT a.id, a.reason, a.created_at, u.name AS by_name,
-            bl.sno, i.code AS item_code, i.name AS item_name, al.qty
+  const heads = await many(
+    `SELECT a.id, a.reason, a.created_at, u.name AS by_name
        FROM boq_amendments a
-       JOIN users u ON u.id = a.created_by
-       JOIN boq_amendment_lines al ON al.amendment_id = a.id
-       JOIN boq_lines bl ON bl.id = al.boq_line_id
-       JOIN items i ON i.id = bl.item_id
-      WHERE a.boq_id = ? ORDER BY a.id DESC, bl.sno`, [boq.id]
+       LEFT JOIN users u ON u.id = a.created_by
+      WHERE a.boq_id = ? ORDER BY a.id DESC`, [boq.id]
   );
-  res.json(rows);
+  if (!heads.length) return res.json([]);
+
+  const rows = await many(
+    `SELECT al.amendment_id, al.qty, al.from_qty, al.to_qty,
+            wol.sno, wol.description, u.code AS uom,
+            bl.sno AS item_sno, i.code AS item_code, i.name AS item_name
+       FROM boq_amendment_lines al
+       LEFT JOIN boq_wo_lines bwl     ON bwl.id = al.boq_wo_line_id
+       LEFT JOIN work_order_lines wol ON wol.id = bwl.wo_line_id
+       LEFT JOIN uoms u               ON u.id = wol.uom_id
+       LEFT JOIN boq_lines bl         ON bl.id = al.boq_line_id
+       LEFT JOIN items i              ON i.id = bl.item_id
+      WHERE al.amendment_id IN (${heads.map(() => '?').join(',')})
+      ORDER BY al.id`, heads.map((h) => h.id)
+  );
+
+  res.json(heads.map((h) => ({
+    id: h.id, reason: h.reason, at: h.created_at, by: h.by_name,
+    lines: rows.filter((r) => r.amendment_id === h.id).map((r) => (
+      r.sno !== null
+        // the shape since 004: a work order line moved
+        ? { kind: 'WO_LINE', sno: r.sno, description: r.description, uom: r.uom,
+            qty: r.qty, from: r.from_qty, to: r.to_qty }
+        // raised before 004, when an amendment named a single item
+        : { kind: 'ITEM', sno: r.item_sno, itemCode: r.item_code, itemName: r.item_name, qty: r.qty }
+    )),
+  })));
+}));
+
+/**
+ * Everything that has happened to one BOQ, in one call: the trail of
+ * what was done to it, every amendment with the lines it moved, and
+ * every indent raised against it.
+ */
+router.get('/:id/history', wrap(async (req, res) => {
+  const boq = await loadBoq(req.params.id);
+
+  const events = await many(
+    `SELECT a.action, a.detail, a.created_at, u.name AS by_name
+       FROM audit_log a
+       LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.entity = 'BOQ' AND a.entity_id = ?
+      ORDER BY a.id DESC`, [boq.id]
+  );
+
+  const indents = await many(
+    `SELECT i.id, i.doc_no, i.indent_date, i.needed_by, i.status, i.created_at,
+            u.name AS raised_by_name,
+            (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id) AS line_count,
+            (SELECT COALESCE(SUM(il.qty), 0) FROM indent_lines il WHERE il.indent_id = i.id) AS total_qty,
+            (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0) AS over_lines
+       FROM indents i
+       LEFT JOIN users u ON u.id = i.raised_by
+      WHERE i.boq_id = ?
+      ORDER BY i.created_at DESC`, [boq.id]
+  );
+
+  res.json({
+    boqId: boq.id, docNo: boq.doc_no, state: boq.state,
+    site: { id: boq.site_id, name: boq.site_name, code: boq.site_code },
+    workOrder: { docNo: boq.wo_doc_no, clientWoNo: boq.client_wo_no },
+    amendedOn: boq.amended_on,
+    events,
+    indents: indents.map((r) => ({
+      ...r,
+      severity: !r.over_lines ? 'none'
+        : (boq.over_allow && Number(boq.over_pct) > 0) ? 'warn' : 'bad',
+    })),
+  });
 }));
 
 module.exports = router;

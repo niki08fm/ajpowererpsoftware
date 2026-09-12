@@ -53,9 +53,17 @@ Everything else has a working default.
 
 ```bash
 cd backend
-npm run db:reset     # drop everything and rebuild from scratch
-npm test             # 40 tests
+npm run db:reset     # DROPS your database and rebuilds it empty
+npm test             # 45 tests
 ```
+
+`npm test` builds and uses its own database, `ajp_erp_test`. It deletes
+every site, work order, BOQ and indent before it runs, so it refuses to
+start against any database whose name does not end in `_test`. Your
+working data is never touched.
+
+`npm run db:reset` is the destructive one — it drops the database named
+in your `.env`.
 
 ## What's in it
 

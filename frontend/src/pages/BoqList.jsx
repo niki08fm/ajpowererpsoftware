@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
+import { AmendSheet, BoqHistory } from './BoqAmend';
 import { api, qty } from '../api';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Meter, Modal, Field,
@@ -17,6 +18,8 @@ export function BoqList() {
   // the sheet opens over the list rather than taking you somewhere else,
   // so you never lose your place in the department
   const [openId, setOpenId] = useState(null);
+  const [amendId, setAmendId] = useState(null);
+  const [historyId, setHistoryId] = useState(null);
 
   const start = async (workOrderId) => {
     try {
@@ -68,6 +71,7 @@ export function BoqList() {
                     <tr>
                       <th>BOQ</th><th>Site</th><th className="rt">Lines</th>
                       <th>Prepared</th><th>Beyond estimate</th><th>Status</th>
+                      <th style={{ width: 170 }} />
                     </tr>
                   </thead>
                   <tbody>
@@ -93,10 +97,17 @@ export function BoqList() {
                             ? <Tag kind="bad">▲ Amendment due · {Number(b.worst_over_pct).toFixed(1)}%</Tag>
                             : b.state === 'LOCKED' ? <Tag kind="ok">Locked</Tag> : <Tag kind="warn">Draft</Tag>}
                         </td>
+                        <td className="rt" onClick={(e) => e.stopPropagation()}>
+                          <button className="btn sm" onClick={() => setHistoryId(b.id)}>History</button>{' '}
+                          {b.status === 'LOCKED' && (
+                            <button className={`btn sm ${b.state === 'AMENDMENT_DUE' ? 'pri' : ''}`}
+                              onClick={() => setAmendId(b.id)}>Amend</button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                     {!(data?.boqs || []).length && (
-                      <tr><td colSpan={6}>
+                      <tr><td colSpan={7}>
                         <Empty title="No BOQ prepared yet">
                           Load a work order on a site, then prepare it here.
                         </Empty>
@@ -112,6 +123,12 @@ export function BoqList() {
 
       {openId && (
         <BoqSheet boqId={openId} onClose={() => { setOpenId(null); reload(); }} />
+      )}
+      {amendId && (
+        <AmendSheet boqId={amendId} onClose={() => setAmendId(null)} onDone={reload} />
+      )}
+      {historyId && (
+        <BoqHistory boqId={historyId} onClose={() => setHistoryId(null)} />
       )}
     </>
   );

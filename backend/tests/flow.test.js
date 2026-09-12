@@ -2,13 +2,23 @@
 /**
  * The Planning -> Site round trip, against a real database.
  *
- * Needs MySQL up and `npm run db:reset` already run. Skipped when
- * there is no database to talk to, so `npm test` still works without one.
+ * This suite DELETES every site, work order, BOQ, indent and
+ * consumption before it runs. It therefore gets its own database and
+ * refuses to touch any other — set below, before anything reads the
+ * config, so no npm script or shell variable has to be remembered.
+ *
+ * Skipped when there is no database to talk to, so `npm test` still
+ * works without one.
  */
+process.env.DB_NAME = process.env.DB_NAME_TEST || 'ajp_erp_test';
+
 const { test, before, after, describe } = require('node:test');
 const assert = require('node:assert');
 const app = require('../src/app');
 const { pool } = require('../src/config/db');
+const { setup } = require('../src/db/setup');
+const env = require('../src/config/env');
+const { resetTransactional } = require('./reset');
 
 let server; let base; let live = false;
 const api = (path, opts = {}) =>
@@ -19,18 +29,20 @@ const api = (path, opts = {}) =>
   }).then(async (r) => ({ status: r.status, body: await r.json() }));
 
 before(async () => {
-  try { await pool.query('SELECT 1'); live = true; } catch { return; }
+  // a suite that empties tables must never be pointed at a working
+  // database. Belt and braces: the name is forced above, and checked
+  // here in case something overrode it.
+  if (!/_test$/.test(env.db.database)) {
+    throw new Error(
+      `Refusing to run: tests delete data and "${env.db.database}" is not a test database. ` +
+      'The name must end in _test.'
+    );
+  }
+  try { await setup({ quiet: true }); await pool.query('SELECT 1'); live = true; } catch { return; }
   server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}/api`;
   // start from clean transactional data, keep the masters
-  for (const t of ['consumption_lines', 'consumptions',
-    'indent_events', 'indent_lines', 'indents', 'boq_amendment_lines',
-    'boq_amendments', 'boq_lines', 'boq_wo_lines', 'boqs',
-    'work_order_lines', 'work_orders', 'site_team', 'sites']) {
-    await pool.query(`DELETE FROM ${t}`);
-  }
-  await pool.query(`DELETE FROM doc_counters`);
-  await pool.query(`DELETE FROM item_code_counters WHERE category_code IN ('ST','GD')`);
+  await resetTransactional(pool);
 });
 after(async () => { if (server) server.close(); await pool.end(); });
 
@@ -43,7 +55,7 @@ describe('planning and site', () => {
     if (!live) return t.skip('no database');
     const r = await api('/sites', { method: 'POST', body: {
       name: 'GMR Aerocity - Block C', branchId: 1, clientId: 1,
-      headUserId: 2, keeperUserId: 3, location: 'Shamshabad',
+      headUserId: 2, keeperUserId: 3, gmUserId: 5, location: 'Shamshabad',
       billingAddress: 'GMR Infra Ltd, RGIA', startDate: '2026-09-01',
       targetCompletion: '2027-03-31', team: [4, 5] } });
     assert.equal(r.status, 201);
@@ -51,16 +63,32 @@ describe('planning and site', () => {
     S.siteId = r.body.id;
 
     const dupe = await api('/sites', { method: 'POST', body: {
-      name: 'gmr  aerocity - block c', branchId: 1, clientId: 1, headUserId: 2, keeperUserId: 3 } });
+      name: 'gmr  aerocity - block c', branchId: 1, clientId: 1, headUserId: 2, keeperUserId: 3, gmUserId: 5 } });
     assert.equal(dupe.status, 409, 'the same name typed differently is refused');
   });
 
   test('completion before start is refused', async (t) => {
     if (!live) return t.skip('no database');
     const r = await api('/sites', { method: 'POST', body: {
-      name: 'Backwards Dates Site', branchId: 1, clientId: 1, headUserId: 2, keeperUserId: 3,
+      name: 'Backwards Dates Site', branchId: 1, clientId: 1, headUserId: 2, keeperUserId: 3, gmUserId: 5,
       startDate: '2027-01-01', targetCompletion: '2026-01-01' } });
     assert.equal(r.status, 400);
+  });
+
+  test('a site cannot be created without a general manager', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = await api('/sites', { method: 'POST', body: {
+      name: 'Site With No GM', branchId: 1, clientId: 1, headUserId: 2, keeperUserId: 3 } });
+    assert.equal(r.status, 400);
+  });
+
+  test('the site reads back who runs it', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = (await api(`/sites/${S.siteId}`)).body;
+    assert.equal(r.head.id, 2);
+    assert.equal(r.keeper.id, 3);
+    assert.equal(r.gm.id, 5, 'the general manager is on the site');
+    assert.ok(!r.team.some((t2) => t2.id === 5), 'and not repeated as a guest on it');
   });
 
   test('the work order loads and values itself', async (t) => {
@@ -111,6 +139,7 @@ describe('planning and site', () => {
     assert.equal(Number(twice.boq_qty), 40, '2 per unit x 20 = 40');
     assert.equal(Number(twice.est_qty), 50, 'and the estimate doubles with it');
     S.line1a = l1[0].boq_line_id;
+    S.bwl1 = after.woLines[0].boq_wo_line_id;
   });
 
   test('the same item twice on one work order line is refused', async (t) => {
@@ -195,7 +224,33 @@ describe('planning and site', () => {
     assert.equal(r.status, 409);
   });
 
-  test('the amendment adds the variation and clears the flag', async (t) => {
+  test('the amend sheet is the preparation sheet, grouped by work order line', async (t) => {
+    if (!live) return t.skip('no database');
+    const sheet = (await api(`/boq/${S.boqId}/amend-sheet`)).body;
+    assert.equal(sheet.woLines.length, 2);
+    const w1 = sheet.woLines[0];
+    assert.equal(Number(w1.contracted_qty), 10);
+    assert.equal(Number(w1.effective_qty), 10, 'nothing amended yet');
+    assert.equal(w1.items.length, 4, 'the items sit under their work order line');
+  });
+
+  test('a preview works out the new numbers without saving them', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = await api(`/boq/${S.boqId}/amendments/preview`, { method: 'POST', body: {
+      reason: 'checking before committing to it',
+      lines: [{ boqWoLineId: S.bwl1, qty: 1 }] } });
+    assert.equal(r.status, 200);
+    const w = r.body.lines[0];
+    assert.equal(Number(w.toQty), 11, '10 contracted + 1');
+    assert.equal(Number(w.toEst), 13, '12 estimated + 1');
+    assert.ok(w.items.every((i) => Number(i.newBoqQty) === 11), 'item qty 1 each, so 1 x 11');
+
+    // and nothing moved
+    const line = (await api(`/indents/boq/${S.boqId}/lines`)).body[0];
+    assert.equal(Number(line.effective_est), 12);
+  });
+
+  test('one number on the work order line moves every item under it', async (t) => {
     if (!live) return t.skip('no database');
     const over = (await api(`/boq/${S.boqId}/over-lines`)).body;
     assert.equal(over.lines.length, 1);
@@ -203,22 +258,83 @@ describe('planning and site', () => {
 
     const r = await api(`/boq/${S.boqId}/amendments`, { method: 'POST', body: {
       reason: 'extra points on the east riser, approved by client',
-      lines: [{ boqLineId: S.line1a, qty: 1 }] } });
+      lines: [{ boqWoLineId: S.bwl1, qty: 1 }] } });
     assert.equal(r.body.state, 'LOCKED');
     assert.equal(r.body.overLines, 0);
+    assert.equal(r.body.lines[0].items, 4, 'all four items recomputed off one number');
+
+    // BOQ qty moved too, which the per-item amendment never did
+    const sheet = (await api(`/boq/${S.boqId}`)).body;
+    assert.equal(Number(sheet.woLines[0].contracted_qty), 10, 'the client document is untouched');
+    assert.equal(Number(sheet.woLines[0].qty), 11, 'the line now stands at 11');
+    assert.ok(sheet.woLines[0].items.every((i) => Number(i.boq_qty) === 11));
 
     const line = (await api(`/indents/boq/${S.boqId}/lines`)).body[0];
-    assert.equal(Number(line.est_qty), 12);
-    assert.equal(Number(line.var_qty), 1);
-    assert.equal(Number(line.effective_est), 13, 'the estimate now covers what was raised');
+    assert.equal(Number(line.est_qty), 12, 'the original estimate is left alone');
+    assert.equal(Number(line.var_qty), 1, 'the amendment sits beside it');
+    assert.equal(Number(line.effective_est), 13, 'and together they cover what was raised');
     assert.equal(Number(line.balance), 0);
+  });
+
+  test('amending the same line twice accumulates instead of drifting', async (t) => {
+    if (!live) return t.skip('no database');
+    await api(`/boq/${S.boqId}/amendments`, { method: 'POST', body: {
+      reason: 'a second variation on the same line',
+      lines: [{ boqWoLineId: S.bwl1, qty: 2 }] } });
+    const sheet = (await api(`/boq/${S.boqId}`)).body;
+    assert.equal(Number(sheet.woLines[0].qty), 13, '10 + 1 + 2');
+    assert.ok(sheet.woLines[0].items.every((i) => Number(i.boq_qty) === 13));
+    assert.ok(sheet.woLines[0].items.every((i) => Number(i.effective_est) === 15), '12 + 3');
+  });
+
+  test('a cut is allowed, but not one that leaves nothing', async (t) => {
+    if (!live) return t.skip('no database');
+    const ok = await api(`/boq/${S.boqId}/amendments`, { method: 'POST', body: {
+      reason: 'client trimmed the scope on this line',
+      lines: [{ boqWoLineId: S.bwl1, qty: -2 }] } });
+    assert.equal(ok.status, 201);
+    const sheet = (await api(`/boq/${S.boqId}`)).body;
+    assert.equal(Number(sheet.woLines[0].qty), 11, '13 less the 2 cut away');
+
+    const tooFar = await api(`/boq/${S.boqId}/amendments`, { method: 'POST', body: {
+      reason: 'cutting the line away entirely',
+      lines: [{ boqWoLineId: S.bwl1, qty: -11 }] } });
+    assert.equal(tooFar.status, 400);
+    assert.match(tooFar.body.error.message, /would leave nothing/);
   });
 
   test('an amendment needs a reason', async (t) => {
     if (!live) return t.skip('no database');
     const r = await api(`/boq/${S.boqId}/amendments`, { method: 'POST', body: {
-      reason: '', lines: [{ boqLineId: S.line1a, qty: 1 }] } });
+      reason: '', lines: [{ boqWoLineId: S.bwl1, qty: 1 }] } });
     assert.equal(r.status, 400);
+  });
+
+  test('the BOQ history gathers its trail, amendments and indents', async (t) => {
+    if (!live) return t.skip('no database');
+    const h = (await api(`/boq/${S.boqId}/history`)).body;
+    assert.ok(h.events.length, 'the trail is there');
+    assert.ok(h.events.some((e) => e.action === 'Amended'));
+    assert.equal(h.indents.length, 1, 'the indent raised against this BOQ');
+    assert.equal(h.indents[0].status, 'SUBMITTED');
+    assert.ok(Number(h.indents[0].total_qty) > 0);
+  });
+
+  test('indents can be listed by the BOQ they were raised against', async (t) => {
+    if (!live) return t.skip('no database');
+    const mine = (await api(`/indents?boqId=${S.boqId}`)).body;
+    assert.equal(mine.indents.length + mine.drafts.length, 1);
+    const none = (await api('/indents?boqId=999999')).body;
+    assert.equal(none.indents.length + none.drafts.length, 0);
+  });
+
+  test('the history reads back what each amendment moved', async (t) => {
+    if (!live) return t.skip('no database');
+    const h = (await api(`/boq/${S.boqId}/amendments`)).body;
+    assert.equal(h.length, 3, 'newest first');
+    assert.equal(h[0].lines[0].kind, 'WO_LINE');
+    assert.equal(Number(h[0].lines[0].qty), -2);
+    assert.ok(h[0].reason.length > 4);
   });
 
   test('returning an indent makes it editable again', async (t) => {
@@ -248,93 +364,73 @@ describe('planning and site', () => {
 
   /* ------------------------------------------------ the whole spine */
 
-  test('nothing can be consumed before it is indented', async (t) => {
+  test('the indent sheet is the BOQ sheet, grouped by work order line', async (t) => {
     if (!live) return t.skip('no database');
-    const r = await api('/consumption/evaluate', { method: 'POST', body: {
-      boqId: S.boqId, lines: [{ boqLineId: S.line1a, qty: 1 }] } });
-    assert.equal(r.status, 409);
-    assert.match(r.body.error.message, /nothing has been indented/);
+    const s = (await api(`/indents/boq/${S.boqId}/sheet`)).body;
+    assert.equal(s.woLines.length, 2);
+    assert.equal(s.woLines[0].items.length, 4, 'items sit under their work order line');
+    const first = s.woLines[0].items[0];
+    assert.ok('item_indented_qty' in first, 'what has already been ordered for the item');
+    assert.ok('effective_est' in first);
   });
 
-  test('an approved indent puts material at site', async (t) => {
+  test('the same item on two work order lines shows one ordered figure', async (t) => {
     if (!live) return t.skip('no database');
-    // the earlier indent was returned, so raise and approve a fresh one
-    const d = await api('/indents', { method: 'POST', body: {
-      siteId: S.siteId, indentDate: '2026-09-08',
-      lines: [{ boqLineId: S.line1a, qty: 10 }], send: true } });
-    S.approvedIndent = d.body.id;
-    await api(`/indents/${S.approvedIndent}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
-
-    const avail = (await api(`/consumption/boq/${S.boqId}/available`)).body;
-    const line = avail.find((l) => l.boq_line_id === S.line1a);
-    assert.equal(Number(line.approved_qty), 10);
-    assert.equal(Number(line.available_qty), 10, 'indented and not yet used');
+    const sheet = (await api(`/indents/boq/${S.boqId}/sheet`)).body;
+    const all = sheet.woLines.flatMap((w) => w.items);
+    const dup = all.filter((i) => all.filter((x) => x.item_id === i.item_id).length > 1);
+    assert.ok(dup.length >= 2, 'the fixture prepares the same item on both work order lines');
+    const first = dup[0];
+    assert.ok(dup.filter((d) => d.item_id === first.item_id)
+      .every((d) => Number(d.item_indented_qty) === Number(first.item_indented_qty)),
+    'what has been ordered is the item total, the same wherever that item appears');
   });
 
-  test('a consumption draft does not count as used', async (t) => {
+  test('an approved indent is one line per item, whatever it was raised against', async (t) => {
     if (!live) return t.skip('no database');
-    const c = await api('/consumption', { method: 'POST', body: {
-      siteId: S.siteId, usedOn: '2026-09-10',
-      lines: [{ boqLineId: S.line1a, qty: 4 }], confirm: false } });
-    assert.equal(c.body.status, 'DRAFT');
-    S.conId = c.body.id;
+    const sheet = (await api(`/indents/boq/${S.boqId}/sheet`)).body;
+    const all = sheet.woLines.flatMap((w) => w.items);
+    const shared = all.filter((i) => all.filter((x) => x.item_id === i.item_id).length > 1);
+    const pair = shared.filter((x) => x.item_id === shared[0].item_id).slice(0, 2);
+    assert.equal(pair.length, 2);
 
-    const line = (await api(`/indents/boq/${S.boqId}/lines`)).body.find((l) => l.boq_line_id === S.line1a);
-    assert.equal(Number(line.consumed_qty), 0, 'a draft is a working note, not a fact');
-    assert.equal(Number(line.available_qty), 10);
+    await api(`/indents/${S.indentId}`, { method: 'PUT', body: {
+      lines: [{ boqLineId: pair[0].boq_line_id, qty: 6 },
+        { boqLineId: pair[1].boq_line_id, qty: 4 }] } });
+    await api(`/indents/${S.indentId}/submit`, { method: 'POST' });
+    await api(`/indents/${S.indentId}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+
+    const ind = (await api(`/indents/${S.indentId}`)).body;
+    assert.equal(ind.status, 'APPROVED');
+    assert.equal(ind.rolledUp, true);
+    assert.equal(ind.lines.length, 2, 'the breakdown stays on the record');
+    assert.equal(ind.rollup.length, 1, 'but it goes out as one item');
+    assert.equal(Number(ind.rollup[0].qty), 10, '6 + 4');
+    assert.equal(Number(ind.rollup[0].from_lines), 2);
+    assert.ok(String(ind.rollup[0].boq_snos).includes(','), 'and names the lines it came off');
   });
 
-  test('confirming it books the quantity against the BOQ line', async (t) => {
-    if (!live) return t.skip('no database');
-    const r = await api(`/consumption/${S.conId}/confirm`, { method: 'POST' });
-    assert.equal(r.body.status, 'CONFIRMED');
 
-    const line = (await api(`/indents/boq/${S.boqId}/lines`)).body.find((l) => l.boq_line_id === S.line1a);
-    assert.equal(Number(line.consumed_qty), 4);
-    assert.equal(Number(line.available_qty), 6, '10 indented less 4 used');
-  });
-
-  test('a confirmed entry cannot be edited', async (t) => {
-    if (!live) return t.skip('no database');
-    const r = await api(`/consumption/${S.conId}`, { method: 'PUT', body: {
-      lines: [{ boqLineId: S.line1a, qty: 1 }] } });
-    assert.equal(r.status, 409);
-  });
-
-  test('you cannot use more than is at site, and it says how much there is', async (t) => {
-    if (!live) return t.skip('no database');
-    const r = await api('/consumption', { method: 'POST', body: {
-      siteId: S.siteId, usedOn: '2026-09-11',
-      lines: [{ boqLineId: S.line1a, qty: 9 }], confirm: true } });
-    assert.equal(r.status, 409);
-    assert.match(r.body.error.message, /only 6 is at site/i);
-    assert.match(r.body.error.message, /10 indented, 4 already used/);
-  });
-
-  test('the rest can be used', async (t) => {
-    if (!live) return t.skip('no database');
-    const r = await api('/consumption', { method: 'POST', body: {
-      siteId: S.siteId, usedOn: '2026-09-11',
-      lines: [{ boqLineId: S.line1a, qty: 6 }], confirm: true } });
-    assert.equal(r.status, 201);
-    const line = (await api(`/indents/boq/${S.boqId}/lines`)).body.find((l) => l.boq_line_id === S.line1a);
-    assert.equal(Number(line.consumed_qty), 10);
-    assert.equal(Number(line.available_qty), 0);
-  });
-
-  test('the site reads end to end: estimated, indented, used, left', async (t) => {
+  test('the site reads end to end: estimated, indented, left', async (t) => {
     if (!live) return t.skip('no database');
     const p = (await api(`/progress/site/${S.siteId}`)).body;
     assert.equal(p.boq.state, 'LOCKED');
     assert.equal(Number(p.totals.indented), 10);
-    assert.equal(Number(p.totals.consumed), 10);
-    assert.equal(Number(p.totals.atSite), 0);
 
-    const line = p.lines.find((l) => l.sno === '1a');
-    assert.equal(Number(line.effective_est), 13);
-    assert.equal(Number(line.approved_qty), 10);
-    assert.equal(Number(line.consumed_qty), 10);
-    assert.equal(Number(line.balance), 3, 'estimate less what is committed');
+    assert.equal(Number(p.lines.find((l) => l.sno === '1a').effective_est), 13,
+      'the amendment is still carried on the line it moved');
+
+    // whichever lines were indented against, the four numbers on every
+    // row still come out of the documents behind them
+    const ordered = p.lines.filter((l) => Number(l.approved_qty) > 0);
+    assert.equal(ordered.reduce((t2, l) => t2 + Number(l.approved_qty), 0), 10);
+    for (const l of p.lines) {
+      assert.equal(
+        Number(l.balance),
+        Number(l.effective_est) - Number(l.committed_qty),
+        `balance on ${l.sno} is derived, not stored`
+      );
+    }
   });
 
   test('the desk gathers what needs attention', async (t) => {

@@ -49,6 +49,41 @@ router.get('/boq/:boqId/lines', wrap(async (req, res) => {
   res.json(await many(`SELECT * FROM v_boq_line_status WHERE boq_id = ? ORDER BY sno`, [req.params.boqId]));
 }));
 
+/**
+ * The same sheet the BOQ was prepared on: work order line, items
+ * beneath it, a quantity typed against each. The column beside the
+ * estimate is what has already been ordered for that item anywhere on
+ * this BOQ — the same switch on 1a and on 2a is one switch to whoever
+ * has to buy it, so a per-line balance was never the useful number.
+ */
+router.get('/boq/:boqId/sheet', wrap(async (req, res) => {
+  const boq = await one(
+    `SELECT b.*, s.id AS site_id, s.name AS site_name, s.code AS site_code,
+            wo.doc_no AS wo_doc_no, wo.client_wo_no
+       FROM boqs b
+       JOIN sites s ON s.id = b.site_id
+       JOIN work_orders wo ON wo.id = b.work_order_id
+      WHERE b.id = ? AND b.status = 'LOCKED'`, [req.params.boqId]
+  );
+  if (!boq) throw notFound('No such BOQ, or it is not locked yet');
+
+  const woLines = await many(
+    `SELECT * FROM v_boq_wo_line WHERE boq_id = ? ORDER BY sno`, [boq.id]);
+  const items = await many(
+    `SELECT * FROM v_boq_line_status WHERE boq_id = ? ORDER BY sno`, [boq.id]);
+
+  res.json({
+    boqId: boq.id, docNo: boq.doc_no,
+    site: { id: boq.site_id, name: boq.site_name, code: boq.site_code },
+    workOrder: { docNo: boq.wo_doc_no, clientWoNo: boq.client_wo_no },
+    policy: { overAllow: !!boq.over_allow, overPct: boq.over_pct },
+    woLines: woLines.map((w) => ({
+      ...w,
+      items: items.filter((i) => i.boq_wo_line_id === w.boq_wo_line_id),
+    })),
+  });
+}));
+
 const linesSchema = z.array(z.object({
   boqLineId: z.coerce.number().int().positive(),
   qty: z.coerce.number().positive(),
@@ -262,12 +297,14 @@ router.get('/',
   validate(z.object({
     branchId: z.coerce.number().int().positive().optional(),
     siteId: z.coerce.number().int().positive().optional(),
+    boqId: z.coerce.number().int().positive().optional(),
   }), 'query'),
   wrap(async (req, res) => {
     const where = [];
     const params = [];
     if (req.query.branchId) { where.push('i.branch_id = ?'); params.push(req.query.branchId); }
     if (req.query.siteId) { where.push('i.site_id = ?'); params.push(req.query.siteId); }
+    if (req.query.boqId) { where.push('i.boq_id = ?'); params.push(req.query.boqId); }
     const rows = await many(
       `SELECT i.id, i.doc_no, i.indent_date, i.needed_by, i.status, i.created_at,
               s.id AS site_id, s.name AS site_name, u.name AS raised_by_name,
@@ -323,8 +360,38 @@ router.get('/:id', wrap(async (req, res) => {
       WHERE e.indent_id = ? ORDER BY e.id`, [ind.id]
   );
   const over = lines.filter((l) => Number(l.over_qty) > 0);
+
+  // Once it is approved, which BOQ line a quantity came off stops
+  // mattering to anyone downstream. The same item asked for on 1a and
+  // on 2a is one item to buy and one heap to pick, so from here it
+  // reads as one line. The breakdown stays on the record for variation.
+  const rollup = await many(
+    `SELECT * FROM v_indent_rollup WHERE indent_id = ? ORDER BY item_name`, [ind.id]);
+
+  // where it has got to, and what each item is still owed
+  const pipeline = await one(
+    `SELECT * FROM v_indent_pipeline WHERE indent_id = ?`, [ind.id]);
+  const flow = await many(
+    `SELECT * FROM v_indent_item_flow WHERE indent_id = ? ORDER BY item_name`, [ind.id]);
+  const orders = await many(
+    `SELECT DISTINCT po.id, po.doc_no, po.po_date, po.expected_date, po.status,
+            sp.name AS supplier_name, d.name AS deliver_to_name, d.site_type AS deliver_to_type,
+            v.receipt_state, v.overdue
+       FROM po_line_indents pli
+       JOIN purchase_order_lines pol ON pol.id = pli.po_line_id
+       JOIN purchase_orders po       ON po.id = pol.po_id
+       JOIN suppliers sp             ON sp.id = po.supplier_id
+       JOIN sites d                  ON d.id = po.deliver_to_id
+       JOIN v_po_status v            ON v.po_id = po.id
+      WHERE pli.indent_id = ? ORDER BY po.po_date, po.id`, [ind.id]);
+
   res.json({
     id: ind.id, docNo: ind.doc_no, status: ind.status,
+    rolledUp: ind.status === 'APPROVED',
+    rollup,
+    pipeline: pipeline || null,
+    flow,
+    orders,
     site: { id: ind.site_id, name: ind.site_name },
     indentDate: ind.indent_date, neededBy: ind.needed_by, raisedBy: ind.raised_by_name,
     boqDocNo: ind.boq_doc_no,

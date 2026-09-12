@@ -26,6 +26,7 @@ const SELECT = `
          c.id AS client_id, c.name AS client_name,
          hu.id AS head_id, hu.name AS head_name,
          ku.id AS keeper_id, ku.name AS keeper_name,
+         gu.id AS gm_id, gu.name AS gm_name,
          wo.id AS wo_id, wo.doc_no AS wo_doc_no, wo.client_wo_no,
          wv.wo_value, wv.line_count AS wo_line_count,
          bq.id AS boq_id, bq.doc_no AS boq_doc_no,
@@ -37,6 +38,7 @@ const SELECT = `
     LEFT JOIN clients c ON c.id = s.client_id
     LEFT JOIN users hu  ON hu.id = s.head_user_id
     LEFT JOIN users ku  ON ku.id = s.keeper_user_id
+    LEFT JOIN users gu  ON gu.id = s.gm_user_id
     LEFT JOIN work_orders wo ON wo.site_id = s.id
     LEFT JOIN v_work_order_value wv ON wv.work_order_id = wo.id
     LEFT JOIN boqs bq ON bq.site_id = s.id
@@ -50,6 +52,7 @@ const shape = (r) => ({
   client: r.client_id ? { id: r.client_id, name: r.client_name } : null,
   head: r.head_id ? { id: r.head_id, name: r.head_name } : null,
   keeper: r.keeper_id ? { id: r.keeper_id, name: r.keeper_name } : null,
+  gm: r.gm_id ? { id: r.gm_id, name: r.gm_name } : null,
   teamCount: r.team_count,
   workOrder: r.wo_id
     ? { id: r.wo_id, docNo: r.wo_doc_no, clientWoNo: r.client_wo_no, value: r.wo_value, lineCount: r.wo_line_count }
@@ -94,6 +97,7 @@ const siteFields = z.object({
   clientId: z.coerce.number().int().positive(),
   headUserId: z.coerce.number().int().positive(),
   keeperUserId: z.coerce.number().int().positive(),
+  gmUserId: z.coerce.number().int().positive(),
   location: z.string().trim().max(300).optional(),
   billingAddress: z.string().trim().max(500).optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -121,15 +125,15 @@ router.post('/', validate(siteBody), wrap(async (req, res) => {
     const code = await nextSiteCode(conn, 'SITE');
     const r = await run(
       `INSERT INTO sites (code, name, norm_key, sort_key, site_type, branch_id, client_id,
-                          head_user_id, keeper_user_id, location, billing_address,
+                          head_user_id, keeper_user_id, gm_user_id, location, billing_address,
                           start_date, target_completion, created_by)
-       VALUES (?, ?, ?, ?, 'SITE', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'SITE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [code, b.name, key, sortKey(b.name), b.branchId, b.clientId, b.headUserId, b.keeperUserId,
-       b.location || null, b.billingAddress || null, b.startDate || null, b.targetCompletion || null,
-       req.user?.id || null], conn
+       b.gmUserId, b.location || null, b.billingAddress || null, b.startDate || null,
+       b.targetCompletion || null, req.user?.id || null], conn
     );
     for (const uid of new Set(b.team)) {
-      if (uid === b.headUserId || uid === b.keeperUserId) continue;
+      if (uid === b.headUserId || uid === b.keeperUserId || uid === b.gmUserId) continue;
       await run(`INSERT IGNORE INTO site_team (site_id, user_id) VALUES (?, ?)`, [r.insertId, uid], conn);
     }
     await log(conn, { entity: 'SITE', entityId: r.insertId, docNo: code, action: 'Created', detail: b.name, user: req.user });
@@ -150,12 +154,13 @@ router.patch('/:id', validate(sitePatch), wrap(async (req, res) => {
     await run(
       `UPDATE sites SET name = COALESCE(?, name), norm_key = COALESCE(?, norm_key), sort_key = COALESCE(?, sort_key),
               client_id = COALESCE(?, client_id), head_user_id = COALESCE(?, head_user_id),
-              keeper_user_id = COALESCE(?, keeper_user_id), location = COALESCE(?, location),
+              keeper_user_id = COALESCE(?, keeper_user_id), gm_user_id = COALESCE(?, gm_user_id),
+              location = COALESCE(?, location),
               billing_address = COALESCE(?, billing_address), start_date = COALESCE(?, start_date),
               target_completion = COALESCE(?, target_completion)
         WHERE id = ?`,
       [b.name ?? null, b.name ? normKey(b.name) : null, b.name ? sortKey(b.name) : null,
-       b.clientId ?? null, b.headUserId ?? null, b.keeperUserId ?? null, b.location ?? null,
+       b.clientId ?? null, b.headUserId ?? null, b.keeperUserId ?? null, b.gmUserId ?? null, b.location ?? null,
        b.billingAddress ?? null, b.startDate ?? null, b.targetCompletion ?? null, site.id], conn
     );
     if (b.team) {

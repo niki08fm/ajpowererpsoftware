@@ -34,7 +34,7 @@ export default function NewSite() {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [p, setP] = useState({
-    name: '', clientId: '', headUserId: '', keeperUserId: '',
+    name: '', clientId: '', headUserId: '', keeperUserId: '', gmUserId: '',
     location: '', billingAddress: '', startDate: today(), targetCompletion: '',
     clientWoNo: '', team: [],
   });
@@ -44,7 +44,8 @@ export default function NewSite() {
 
   const set = (k) => (e) => setP((x) => ({ ...x, [k]: e.target.value }));
   const free = users.filter((u) => !p.team.includes(u.id)
-    && u.id !== Number(p.headUserId) && u.id !== Number(p.keeperUserId));
+    && u.id !== Number(p.headUserId) && u.id !== Number(p.keeperUserId)
+    && u.id !== Number(p.gmUserId));
 
   const totals = useMemo(() => lines.reduce((a, l) => ({
     supply: a.supply + (Number(l.qty) || 0) * (Number(l.supplyRate) || 0),
@@ -56,6 +57,7 @@ export default function NewSite() {
     if (!p.clientId) return toast('Pick the client this site belongs to', 'bad');
     if (!p.headUserId) return toast('Choose the site head', 'bad');
     if (!p.keeperUserId) return toast('Choose the site storekeeper', 'bad');
+    if (!p.gmUserId) return toast('Choose the general manager', 'bad');
     if (p.targetCompletion && p.startDate && p.targetCompletion < p.startDate) {
       return toast('Completion cannot be before the start date', 'bad');
     }
@@ -94,6 +96,7 @@ export default function NewSite() {
       const site = await api.post('/sites', {
         name: p.name.trim(), branchId, clientId: Number(p.clientId),
         headUserId: Number(p.headUserId), keeperUserId: Number(p.keeperUserId),
+        gmUserId: Number(p.gmUserId),
         location: p.location || undefined, billingAddress: p.billingAddress || undefined,
         startDate: p.startDate || undefined, targetCompletion: p.targetCompletion || undefined,
         team: p.team,
@@ -153,6 +156,12 @@ export default function NewSite() {
                     </select>
                   </Field>
                 </div>
+                <Field label="General manager" hint="The person this project answers to.">
+                  <select className="inp" value={p.gmUserId} onChange={set('gmUserId')}>
+                    <option value="">— choose —</option>
+                    {users.map((u) => <option key={u.id} value={u.id}>{u.name} — {u.department}</option>)}
+                  </select>
+                </Field>
                 <Field label="Others on this project"
                   hint="Recorded now. What it controls is decided when we settle access.">
                   <div style={{ display: 'flex', gap: 8 }}>

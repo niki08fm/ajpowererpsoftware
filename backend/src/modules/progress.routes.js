@@ -18,7 +18,7 @@ router.get('/site/:siteId', wrap(async (req, res) => {
             b.id AS boq_id, b.doc_no AS boq_doc_no, b.status AS boq_status,
             b.over_allow, b.over_pct,
             vb.state, vb.prepared_count, vb.wo_line_count, vb.over_line_count, vb.worst_over_pct,
-            vp.boq_lines, vp.indented_qty, vp.consumed_qty, vp.at_site_qty,
+            vp.boq_lines, vp.indented_qty,
             vw.wo_value
        FROM sites s
        LEFT JOIN clients c ON c.id = s.client_id
@@ -35,7 +35,7 @@ router.get('/site/:siteId', wrap(async (req, res) => {
     ? await many(
       `SELECT sno, wo_sno, wo_description, item_code, item_name, uom, make_name,
               item_qty, boq_qty, est_qty, var_qty, effective_est,
-              approved_qty, pending_qty, consumed_qty, available_qty, balance,
+              approved_qty, pending_qty, committed_qty, item_indented_qty, balance,
               over_qty, over_pct_actual
          FROM v_boq_line_status WHERE boq_id = ? ORDER BY sno`, [site.boq_id])
     : [];
@@ -56,8 +56,7 @@ router.get('/site/:siteId', wrap(async (req, res) => {
     totals: {
       boqLines: site.boq_lines || 0,
       indented: site.indented_qty || 0,
-      consumed: site.consumed_qty || 0,
-      atSite: site.at_site_qty || 0,
+
     },
     lines,
   });

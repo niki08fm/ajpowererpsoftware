@@ -15,7 +15,14 @@ router.use('/sites',       require('../modules/sites.routes'));
 router.use('/work-orders', require('../modules/workorders.routes'));
 router.use('/boq',         require('../modules/boq.routes'));
 router.use('/indents',     require('../modules/indents.routes'));
-router.use('/consumption', require('../modules/consumption.routes'));
 router.use('/progress',    require('../modules/progress.routes'));
+router.use('/suppliers',   require('../modules/suppliers.routes'));
+router.use('/procurement', require('../modules/procurement.routes'));
+router.use('/purchase-orders', require('../modules/purchaseorders.routes'));
+router.use('/comparisons', require('../modules/comparisons.routes'));
+router.use('/store',       require('../modules/store.routes'));
+router.use('/challans',    require('../modules/challans.routes'));
+router.use('/grns',        require('../modules/grn.routes'));
+router.use('/site-store',  require('../modules/sitestore.routes'));
 
 module.exports = router;

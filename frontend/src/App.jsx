@@ -8,12 +8,18 @@ import NewSite from './pages/NewSite';
 import SiteDetail from './pages/SiteDetail';
 import Stores from './pages/Stores';
 import Items from './pages/Items';
+import Procurement from './pages/Procurement';
+import Suppliers from './pages/Suppliers';
+import { PurchaseOrders, PurchaseOrderDetail } from './pages/PurchaseOrders';
+import { Comparisons, ComparisonDetail } from './pages/Comparisons';
+import { StoreDesk, Prns, IssueSheet, Stock, Movements } from './pages/Store';
+import { Grns, GrnRegister, GrnDetail } from './pages/Grns';
+import { SiteInbox, SiteStock } from './pages/SiteStore';
+import { Challans, ChallanDetail } from './pages/Challans';
 import BoqList from './pages/BoqList';
-import Amendments from './pages/Amendments';
 import Indents from './pages/Indents';
 import IndentCart from './pages/IndentCart';
 import IndentDetail from './pages/IndentDetail';
-import Consumption from './pages/Consumption';
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx);
@@ -22,9 +28,9 @@ export const useApp = () => useContext(AppCtx);
  * The rail picks a department, the tab bar picks the screen within it —
  * the same two-level structure the prototype settled on.
  *
- * Only Planning and Site exist so far. Store, Procure, Billing and
- * Accounts come later; they are not stubbed here, because an empty
- * screen is worse than no screen.
+ * Planning, Site, Store and Procure exist. Billing and Accounts come
+ * later; they are not stubbed here, because an empty screen is worse
+ * than no screen.
  */
 export const SECTIONS = [
   {
@@ -34,8 +40,7 @@ export const SECTIONS = [
     screens: [
       { to: '/sites', label: 'Sites' },
       { to: '/stores', label: 'Stores' },
-      { to: '/boq', label: 'BOQ' },
-      { to: '/amendments', label: 'Amendments', badge: 'amendmentDue' },
+      { to: '/boq', label: 'BOQ', badge: 'amendmentDue' },
       { to: '/items', label: 'Item master' },
     ],
   },
@@ -45,7 +50,32 @@ export const SECTIONS = [
     icon: '\u25CD',
     screens: [
       { to: '/indents', label: 'Indents', badge: 'indentsWaiting' },
-      { to: '/consumption', label: 'Consumption' },
+      { to: '/site/inbox', label: 'Acknowledgements' },
+      { to: '/site/stock', label: 'Site store' },
+    ],
+  },
+  {
+    id: 'store',
+    label: 'Store',
+    icon: '\u25A5',
+    screens: [
+      { to: '/store', label: 'Store desk', end: true },
+      { to: '/store/prns', label: 'PRNs to fulfil' },
+      { to: '/grns', label: 'GRN' },
+      { to: '/challans', label: 'Challans' },
+      { to: '/stock', label: 'Stock' },
+      { to: '/movements', label: 'Movement' },
+    ],
+  },
+  {
+    id: 'procure',
+    label: 'Procure',
+    icon: '\u25C6',
+    screens: [
+      { to: '/procurement', label: 'To buy' },
+      { to: '/comparisons', label: 'Rate comparison' },
+      { to: '/purchase-orders', label: 'Orders' },
+      { to: '/suppliers', label: 'Suppliers' },
     ],
   },
 ];
@@ -56,8 +86,6 @@ export const SECTIONS = [
  * wonders where Billing went — but they are plainly not built yet.
  */
 export const SOON = [
-  { id: 'store',    label: 'Store',    icon: '\u25A5' },
-  { id: 'procure',  label: 'Procure',  icon: '\u25C6' },
   { id: 'billing',  label: 'Billing',  icon: '\u20B9' },
   { id: 'accounts', label: 'Accounts', icon: '\u25CE' },
   { id: 'reports',  label: 'Reports',  icon: '\u2637' },
@@ -67,7 +95,7 @@ const sectionFor = (pathname) =>
   SECTIONS.find((s) => s.screens.some((x) => pathname.startsWith(x.to))) || SECTIONS[0];
 
 function Shell({ children }) {
-  const { branches, branchId, setBranch, users, me, desk } = useApp();
+  const { branches, branchId, setBranch, stores, storeId, setStore, users, me, desk } = useApp();
   const { pathname } = useLocation();
   const section = sectionFor(pathname);
   const [flyout, setFlyout] = useState(null);
@@ -128,6 +156,21 @@ function Shell({ children }) {
           <select id="branch" value={branchId || ''} onChange={(e) => setBranch(Number(e.target.value))}>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
+          {/* Which shelf you are standing on. Only the Store department
+              is answered for one store, so it only shows there. */}
+          {section.id === 'store' && stores.length > 0 && (
+            <>
+              <label className="who" htmlFor="store">Store</label>
+              <select id="store" value={storeId || ''}
+                onChange={(e) => setStore(Number(e.target.value))}>
+                {stores.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.name}{st.is_central ? ' · central' : ''}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {/* No login yet — this only decides whose name goes on a document. */}
           <label className="who" htmlFor="who">Working as</label>
           <select id="who" value={me?.id || ''}
@@ -139,7 +182,8 @@ function Shell({ children }) {
         <nav className="tabs" aria-label={`${section.label} options`}>
           <span className="dept">{section.label}</span>
           {section.screens.map((x) => (
-            <NavLink key={x.to} to={x.to} className={({ isActive }) => (isActive ? 'on' : '')}>
+            <NavLink key={x.to} to={x.to} end={x.end}
+              className={({ isActive }) => (isActive ? 'on' : '')}>
               {x.label}
               {x.badge && counts[x.badge] > 0 && <span className="count">{counts[x.badge]}</span>}
             </NavLink>
@@ -163,6 +207,8 @@ export const PageHead = ({ title, sub, actions }) => (
 export default function App() {
   const [boot, setBoot] = useState({ loading: true });
   const [branchId, setBranchId] = useState(Number(localStorage.getItem('ajp.branchId')) || null);
+  const [storeId, setStoreId] = useState(Number(localStorage.getItem('ajp.storeId')) || null);
+  const [stores, setStores] = useState([]);
   const [desk, setDesk] = useState(null);
 
   useEffect(() => {
@@ -174,6 +220,19 @@ export default function App() {
       })
       .catch((error) => setBoot({ loading: false, error }));
   }, []);
+
+  // A branch may run several stores. Everything in the Store department
+  // is answered for one of them, so it is chosen once and remembered —
+  // the same way the branch is.
+  useEffect(() => {
+    if (!branchId) return;
+    api.get(`/store/stores?branchId=${branchId}`)
+      .then((rows) => {
+        setStores(rows);
+        setStoreId((cur) => (rows.some((r) => r.id === cur) ? cur : rows[0]?.id || null));
+      })
+      .catch(() => { setStores([]); setStoreId(null); });
+  }, [branchId]);
 
   // counts for the tab badges: an amendment that is due should be
   // visible from wherever you happen to be standing
@@ -195,9 +254,12 @@ export default function App() {
   }
 
   const setBranch = (id) => { setBranchId(id); localStorage.setItem('ajp.branchId', String(id)); };
+  const setStore = (id) => { setStoreId(id); localStorage.setItem('ajp.storeId', String(id)); };
 
   return (
-    <AppCtx.Provider value={{ ...boot, branchId, setBranch, desk, refreshDesk }}>
+    <AppCtx.Provider value={{
+      ...boot, branchId, setBranch, storeId, setStore, stores, desk, refreshDesk,
+    }}>
       <ToastHost>
         <BrowserRouter>
           <Shell>
@@ -208,13 +270,30 @@ export default function App() {
               <Route path="/sites/:id" element={<SiteDetail />} />
               <Route path="/stores" element={<Stores />} />
               <Route path="/boq" element={<BoqList />} />
-              <Route path="/amendments" element={<Amendments />} />
               <Route path="/items" element={<Items />} />
+              <Route path="/store" element={<StoreDesk />} />
+              <Route path="/store/prns" element={<Prns />} />
+              <Route path="/store/issue" element={<IssueSheet />} />
+              <Route path="/grns" element={<Grns />} />
+              <Route path="/grns/register" element={<GrnRegister />} />
+              <Route path="/grns/:id" element={<GrnDetail />} />
+              <Route path="/stock" element={<Stock />} />
+              <Route path="/movements" element={<Movements />} />
+              <Route path="/challans" element={<Challans />} />
+              <Route path="/challans/new" element={<Navigate to="/store/prns" replace />} />
+              <Route path="/challans/:id" element={<ChallanDetail />} />
+              <Route path="/site/inbox" element={<SiteInbox />} />
+              <Route path="/site/stock" element={<SiteStock />} />
+              <Route path="/procurement" element={<Procurement />} />
+              <Route path="/comparisons" element={<Comparisons />} />
+              <Route path="/comparisons/:id" element={<ComparisonDetail />} />
+              <Route path="/purchase-orders" element={<PurchaseOrders />} />
+              <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+              <Route path="/suppliers" element={<Suppliers />} />
               <Route path="/indents" element={<Indents />} />
               <Route path="/indents/new" element={<IndentCart />} />
               <Route path="/indents/:id" element={<IndentDetail />} />
               <Route path="/indents/:id/edit" element={<IndentCart />} />
-              <Route path="/consumption" element={<Consumption />} />
               <Route path="*" element={<div className="page-body"><p>No such page.</p></div>} />
             </Routes>
           </Shell>

@@ -1,14 +1,13 @@
 import { useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { PageHead } from '../App';
 import { money, qty, dmy } from '../api';
 import { useApi, Card, Tag, Loading, ErrorNote, Banner, Stat, Meter, Empty } from '../components/ui';
 import { BoqSheet } from './BoqList';
 
 /**
- * One site read end to end: the work order it runs on, the BOQ that
- * prepares it, and for every BOQ line — estimated, indented, used,
- * left. Four numbers about one row, none of them stored anywhere.
+ * One site read end to end: who runs it, the work order it runs on,
+ * and the BOQ that prepares it.
  */
 export default function SiteDetail() {
   const { id } = useParams();
@@ -51,6 +50,7 @@ export default function SiteDetail() {
                     <tr><td style={{ color: 'var(--muted)', width: 170 }}>Client</td><td><b>{site.client?.name || '—'}</b></td></tr>
                     <tr><td style={{ color: 'var(--muted)' }}>Site head</td><td>{site.head?.name || '—'}</td></tr>
                     <tr><td style={{ color: 'var(--muted)' }}>Storekeeper</td><td>{site.keeper?.name || '—'}</td></tr>
+                    <tr><td style={{ color: 'var(--muted)' }}>General manager</td><td>{site.gm?.name || '—'}</td></tr>
                     <tr><td style={{ color: 'var(--muted)' }}>Others on the project</td>
                       <td>{site.team?.length
                         ? site.team.map((t) => <span className="chip" key={t.id} style={{ marginRight: 6 }}>{t.name}<small>{t.department}</small></span>)
@@ -65,16 +65,15 @@ export default function SiteDetail() {
             </Card>
 
             {prog?.lines?.length ? (
-              <Card title="Where each line stands"
-                sub="Estimated, indented, used, and what is left — every figure derived from the documents behind it">
+              <Card title="Indented against the BOQ"
+                sub="What has been asked for, and how much of it went past the estimate">
                 <div className="tw">
                   <table className="sheet">
                     <thead>
                       <tr>
                         <th style={{ width: 56 }}>Sl No</th><th>Item</th><th style={{ width: 70 }}>Unit</th>
                         <th className="rt">BOQ qty</th><th className="rt">Estimate</th>
-                        <th className="rt">Indented</th><th className="rt">Used</th>
-                        <th className="rt">At site</th><th className="rt">Left</th>
+                        <th className="rt">Indented</th><th className="rt">Variation</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -86,14 +85,13 @@ export default function SiteDetail() {
                           <td className="rt mono">{qty(l.boq_qty)}</td>
                           <td className="rt mono">
                             {qty(l.effective_est)}
-                            {Number(l.var_qty) > 0 && <small style={{ color: 'var(--brand)' }}>incl. +{qty(l.var_qty)}</small>}
+                            {Number(l.var_qty) > 0 && <small style={{ color: 'var(--brand)' }}>incl. +{qty(l.var_qty)} amended</small>}
                           </td>
                           <td className="rt mono">{qty(l.approved_qty)}</td>
-                          <td className="rt mono">{qty(l.consumed_qty)}</td>
-                          <td className="rt mono">{qty(l.available_qty)}</td>
-                          <td className="rt mono" style={{ color: Number(l.balance) < 0 ? 'var(--bad)' : undefined }}>
-                            {qty(l.balance)}
-                            {Number(l.over_qty) > 0 && <small style={{ color: 'var(--bad)' }}>▲ {Number(l.over_pct_actual).toFixed(1)}% over</small>}
+                          <td className="rt mono" style={{ color: Number(l.over_qty) > 0 ? 'var(--bad)' : undefined }}>
+                            {Number(l.over_qty) > 0
+                              ? <><b>▲ {qty(l.over_qty)}</b><small style={{ color: 'var(--bad)' }}>{Number(l.over_pct_actual).toFixed(1)}% over</small></>
+                              : <span style={{ color: 'var(--faint)' }}>—</span>}
                           </td>
                         </tr>
                       ))}
@@ -102,10 +100,10 @@ export default function SiteDetail() {
                 </div>
               </Card>
             ) : (
-              <Card title="Where each line stands">
+              <Card title="Indented against the BOQ">
                 <Empty title={site.workOrder ? 'The BOQ is not prepared yet' : 'No work order loaded yet'}>
                   {site.workOrder
-                    ? <Link to="/boq" style={{ textDecoration: 'underline' }}>Prepare it</Link>
+                    ? 'Prepare it from the BOQ screen to start indenting.'
                     : 'A site runs on its work order — load it to get started.'}
                 </Empty>
               </Card>
