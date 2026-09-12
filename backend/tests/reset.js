@@ -21,6 +21,8 @@ const TABLES = [
   'comparison_quotes', 'comparison_suppliers', 'comparison_items',
   'comparison_indents', 'comparisons',
   'supplier_makes', 'suppliers',
+  // billing
+  'bill_lines', 'bills',
   // site
   'site_expense_events', 'site_expenses',
   'stock_return_lines', 'stock_returns',

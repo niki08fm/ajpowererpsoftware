@@ -19,6 +19,7 @@ import { IssueStock, ReturnStock } from './pages/Consumption';
 import { Transactions, Audit, Consumed } from './pages/Tracking';
 import Expenses from './pages/Expenses';
 import { ExpenseReport, ProfitLoss } from './pages/Reports';
+import { Billing, BillingSheet, Bills } from './pages/Billing';
 import { Challans, ChallanDetail } from './pages/Challans';
 import BoqList from './pages/BoqList';
 import Indents from './pages/Indents';
@@ -32,8 +33,8 @@ export const useApp = () => useContext(AppCtx);
  * The rail picks a department, the tab bar picks the screen within it —
  * the same two-level structure the prototype settled on.
  *
- * Planning, Site, Store, Procure and Reports exist. Billing and
- * Accounts come later; they are not stubbed here, because an empty
+ * Planning, Site, Store, Procure, Billing and Reports exist.
+ * Accounts comes later; it is not stubbed here, because an empty
  * screen is worse than no screen.
  *
  * Everything a site team asks while working lives under Site, and
@@ -83,6 +84,15 @@ export const SECTIONS = [
     ],
   },
   {
+    id: 'billing',
+    label: 'Billing',
+    icon: '\u20B9',
+    screens: [
+      { to: '/billing', label: 'Bill a site', end: true },
+      { to: '/billing/bills', label: 'Bills' },
+    ],
+  },
+  {
     id: 'reports',
     label: 'Reports',
     icon: '\u2637',
@@ -110,7 +120,6 @@ export const SECTIONS = [
  * wonders where Billing went — but they are plainly not built yet.
  */
 export const SOON = [
-  { id: 'billing',  label: 'Billing',  icon: '\u20B9' },
   { id: 'accounts', label: 'Accounts', icon: '\u25CE' },
 ];
 
@@ -314,6 +323,9 @@ export default function App() {
               <Route path="/site/audit" element={<Audit />} />
               <Route path="/site/consumption" element={<Consumed />} />
               <Route path="/site/expenses" element={<Expenses />} />
+              <Route path="/billing" element={<Billing />} />
+              <Route path="/billing/bills" element={<Bills />} />
+              <Route path="/billing/site/:siteId" element={<BillingSheet />} />
               <Route path="/reports/expense" element={<ExpenseReport />} />
               <Route path="/reports/pl" element={<ProfitLoss />} />
               {/* these lived under Reports for a day; keep the links working */}

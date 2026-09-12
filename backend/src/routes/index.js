@@ -28,5 +28,6 @@ router.use('/consumption', require('../modules/consumption.routes'));
 router.use('/tracking',    require('../modules/tracking.routes'));
 router.use('/expenses',    require('../modules/expenses.routes'));
 router.use('/costs',       require('../modules/costs.routes'));
+router.use('/bills',       require('../modules/bills.routes'));
 
 module.exports = router;

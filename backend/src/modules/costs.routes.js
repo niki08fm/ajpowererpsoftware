@@ -347,22 +347,21 @@ router.get('/expense/lines',
 );
 
 /* ==================================================================
-   PROFIT AND LOSS — what can and cannot be answered yet
-   ================================================================== */
+   PROFIT AND LOSS
+   ==================================================================
+   It exists now, and only because billing does.
 
-/**
- * There is no profit and loss until the client is billed.
- *
- * Cost is known to the rupee: every issue, every return, every
- * approved claim. Revenue is not known at all — a work order is what
- * was agreed, not what has been invoiced, and treating an agreement
- * as income is how a business convinces itself it is profitable while
- * running out of money.
- *
- * So this endpoint answers the half it can, states plainly what is
- * missing, and refuses to guess the rest. When Billing exists it
- * gains a revenue side and nothing else about it changes.
- */
+   Revenue is raised bills and nothing else. Not the work order — that
+   is an agreement, and treating an agreement as income is how a
+   business persuades itself it is profitable while running out of
+   money. Not a draft bill either: a working note is not an invoice.
+
+   So a site that has never been billed still gets `available: false`,
+   and the screen says so rather than showing a cost figure under a
+   heading that reads "profit and loss" and inviting somebody to read
+   it as a loss. The moment RA 1 is raised, the same endpoint answers
+   properly and nothing about the cost side changes.
+   ================================================================== */
 router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
   const q = req.query;
   const { clause, params } = scope(q);
@@ -370,13 +369,30 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
   const cost = await one(
     `SELECT COALESCE(SUM(CASE WHEN c.source = 'MATERIAL' THEN c.amount ELSE 0 END), 0)
               AS material,
-            COALESCE(SUM(CASE WHEN c.source = 'EXPENSE' THEN c.amount ELSE 0 END), 0)
-              AS expense,
+            COALESCE(SUM(CASE WHEN c.kind = 'LABOUR' THEN c.amount ELSE 0 END), 0)
+              AS labour,
+            COALESCE(SUM(CASE WHEN c.source = 'EXPENSE' AND c.kind <> 'LABOUR'
+                              THEN c.amount ELSE 0 END), 0) AS other,
             COALESCE(SUM(c.amount), 0) AS total
        FROM v_cost_event c ${clause}`, params);
 
-  // what the client agreed to pay, which is not the same as revenue
-  // and is shown only so the gap between the two is visible
+  // revenue: raised bills, in the same window and scope
+  const revWhere = [`b.status = 'RAISED'`];
+  const revParams = [];
+  if (q.siteId) { revWhere.push('b.site_id = ?'); revParams.push(q.siteId); }
+  else if (q.branchId) { revWhere.push('b.branch_id = ?'); revParams.push(q.branchId); }
+  if (q.from) { revWhere.push('b.bill_date >= ?'); revParams.push(q.from); }
+  if (q.to) { revWhere.push('b.bill_date <= ?'); revParams.push(q.to); }
+
+  const rev = await one(
+    `SELECT COUNT(DISTINCT b.id) AS bills,
+            COALESCE(SUM(l.supply_amount), 0) AS supply,
+            COALESCE(SUM(l.inst_amount), 0)   AS inst,
+            COALESCE(SUM(l.line_total), 0)    AS revenue,
+            MIN(b.bill_date) AS first_on, MAX(b.bill_date) AS last_on
+       FROM bills b JOIN bill_lines l ON l.bill_id = b.id
+      WHERE ${revWhere.join(' AND ')}`, revParams);
+
   const orderWhere = [];
   const orderParams = [];
   if (q.siteId) { orderWhere.push('wo.site_id = ?'); orderParams.push(q.siteId); }
@@ -386,36 +402,85 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
        FROM work_orders wo JOIN work_order_lines l ON l.work_order_id = wo.id
        ${orderWhere.length ? `WHERE ${orderWhere.join(' AND ')}` : ''}`, orderParams);
 
+  const revenue = money(rev.revenue);
+  const total = money(cost.total);
+  const available = Number(rev.bills) > 0;
+
+  // per site, so a branch view shows which sites are carrying which
   const sites = await many(
-    `SELECT c.site_id, s.name AS site_name, s.code AS site_code, cl.name AS client_name,
-            SUM(c.amount) AS cost,
-            COALESCE((SELECT SUM(l.line_total) FROM work_orders wo
-                        JOIN work_order_lines l ON l.work_order_id = wo.id
-                       WHERE wo.site_id = c.site_id), 0) AS order_value
-       FROM v_cost_event c
-       JOIN sites s ON s.id = c.site_id
+    `SELECT s.id AS site_id, s.name AS site_name, s.code AS site_code,
+            cl.name AS client_name,
+            COALESCE(c.cost, 0)    AS cost,
+            COALESCE(r.revenue, 0) AS revenue,
+            COALESCE(r.bills, 0)   AS bills,
+            COALESCE((SELECT SUM(wl.line_total) FROM work_orders wo
+                        JOIN work_order_lines wl ON wl.work_order_id = wo.id
+                       WHERE wo.site_id = s.id), 0) AS order_value
+       FROM sites s
        LEFT JOIN clients cl ON cl.id = s.client_id
-       ${clause}
-      GROUP BY c.site_id, s.name, s.code, cl.name
-      ORDER BY cost DESC`, params);
+       LEFT JOIN (SELECT site_id, SUM(amount) AS cost FROM v_cost_event
+                   ${q.from || q.to ? 'WHERE 1=1' : ''}
+                   ${q.from ? 'AND event_date >= ?' : ''}
+                   ${q.to ? 'AND event_date <= ?' : ''}
+                  GROUP BY site_id) c ON c.site_id = s.id
+       LEFT JOIN (SELECT b.site_id, COUNT(DISTINCT b.id) AS bills,
+                         SUM(l.line_total) AS revenue
+                    FROM bills b JOIN bill_lines l ON l.bill_id = b.id
+                   WHERE b.status = 'RAISED'
+                     ${q.from ? 'AND b.bill_date >= ?' : ''}
+                     ${q.to ? 'AND b.bill_date <= ?' : ''}
+                   GROUP BY b.site_id) r ON r.site_id = s.id
+      WHERE s.site_type = 'SITE'
+        ${q.siteId ? 'AND s.id = ?' : q.branchId ? 'AND s.branch_id = ?' : ''}
+        AND (c.cost IS NOT NULL OR r.revenue IS NOT NULL)
+      ORDER BY revenue DESC, cost DESC`,
+    [
+      ...(q.from ? [q.from] : []), ...(q.to ? [q.to] : []),
+      ...(q.from ? [q.from] : []), ...(q.to ? [q.to] : []),
+      ...(q.siteId ? [q.siteId] : q.branchId ? [q.branchId] : []),
+    ]);
 
   res.json({
-    available: false,
-    blockedBy: 'BILLING',
-    reason: 'A profit and loss needs revenue, and nothing has been billed to a client yet. '
-      + 'Billing is not built, so there is no invoice to take revenue from.',
+    available,
+    ...(available ? {} : {
+      blockedBy: 'BILLING',
+      reason: 'Nothing has been billed in this scope yet. A profit and loss needs revenue, '
+        + 'and a work order is what a client agreed to pay, not what they have been '
+        + 'invoiced.',
+    }),
+    revenue: {
+      total: revenue,
+      supply: money(rev.supply),
+      installation: money(rev.inst),
+      bills: Number(rev.bills),
+      firstOn: rev.first_on,
+      lastOn: rev.last_on,
+    },
     cost: {
       material: money(cost.material),
-      expense: money(cost.expense),
-      total: money(cost.total),
+      labour: money(cost.labour),
+      other: money(cost.other),
+      expense: money(Number(cost.labour) + Number(cost.other)),
+      total,
     },
-    // deliberately not called revenue
+    profit: {
+      gross: money(revenue - total),
+      marginPct: revenue > 0 ? Math.round(((revenue - total) / revenue) * 10000) / 100 : 0,
+    },
     orderValue: money(ordered.value),
     orderCount: Number(ordered.orders),
+    // what has been earned against what was agreed: the order book
+    // less what has been billed off it
+    unbilledOrderValue: money(Number(ordered.value) - revenue),
     sites: sites.map((r) => ({
       ...r,
       cost: money(r.cost),
+      revenue: money(r.revenue),
       order_value: money(r.order_value),
+      profit: money(Number(r.revenue) - Number(r.cost)),
+      margin_pct: Number(r.revenue) > 0
+        ? Math.round(((Number(r.revenue) - Number(r.cost)) / Number(r.revenue)) * 10000) / 100
+        : null,
     })),
   });
 }));

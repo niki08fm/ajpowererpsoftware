@@ -4,7 +4,7 @@ import { useApp, PageHead } from '../App';
 import { qty, money, dmy, today, addDays } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Stat,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat,
 } from '../components/ui';
 import { TrendChart, RankBars, DonutChart, LineChart } from '../components/charts';
 
@@ -528,18 +528,14 @@ function ChartView({ data, bucket, totals }) {
 /* ===================================================================
    PROFIT AND LOSS
    ===================================================================
-   There is nothing to show, and the screen says so in a sentence.
+   It exists now, because billing does.
 
-   A profit and loss is revenue less cost. Cost is known to the rupee;
-   revenue is not known at all, because nothing has been billed. The
-   only income-side figure this system holds is the work order — what
-   a client agreed to pay — and an agreement is not income.
-
-   So there is no date filter here, because a window over nothing is
-   still nothing, and no cost breakdown either: that is the expense
-   report's job and duplicating it here would only invite somebody to
-   read the cost as though it were a loss. One choice, one sentence,
-   one way out to the report that does have the answer.
+   Revenue is raised bills and nothing else — not the work order,
+   which is an agreement, and not a draft, which is a working note.
+   A site nobody has billed still gets the sentence saying so and a
+   way through to the expense report, because showing a cost figure
+   under a heading that reads "profit and loss" invites somebody to
+   read it as a loss.
    =================================================================== */
 export function ProfitLoss() {
   const { branchId, branches } = useApp();
@@ -553,10 +549,37 @@ export function ProfitLoss() {
   const site = (sites || []).find((x) => String(x.id) === String(f.site));
   const branch = (branches || []).find((b) => b.id === branchId);
 
+  const grab = () => downloadCsv(`profit-and-loss${site ? `-${site.code || site.id}` : ''}`, [
+    ['PROFIT AND LOSS'],
+    ['Scope', site ? site.name : `Every site in ${branch?.name || 'this branch'}`],
+    [],
+    ['Revenue — raised bills', data.revenue.total],
+    ['  Supply', data.revenue.supply],
+    ['  Installation', data.revenue.installation],
+    [],
+    ['Cost', data.cost.total],
+    ['  Material consumed', data.cost.material],
+    ['  Labour', data.cost.labour],
+    ['  Other expenses', data.cost.other],
+    [],
+    ['GROSS PROFIT', data.profit.gross],
+    ['Margin %', data.profit.marginPct],
+    [],
+    ['Site', 'Client', 'Work order', 'Revenue', 'Cost', 'Profit', 'Margin %'],
+    ...data.sites.map((r) => [
+      r.site_name, r.client_name || '', r.order_value, r.revenue, r.cost, r.profit,
+      r.margin_pct ?? '',
+    ]),
+  ]);
+
   return (
     <>
       <PageHead title="Profit and loss"
-        sub="Nothing has been billed, so there is nothing to report" />
+        sub={data?.available
+          ? 'Revenue from raised bills, less what the work cost'
+          : 'Nothing has been billed in this scope yet'}
+        actions={data?.available
+          ? <button className="btn" onClick={grab}>Download</button> : null} />
 
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
@@ -573,35 +596,156 @@ export function ProfitLoss() {
           </div>
         </Card>
 
-        {loading || !data ? <Loading /> : data.available ? null : (
-          <Card>
-            <div className="pad" style={{ textAlign: 'center', padding: '46px 24px' }}>
-              <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 14 }} aria-hidden="true">
-                ₹
+        {loading || !data ? <Loading />
+          : !data.available ? (
+            <Card>
+              <div className="pad" style={{ textAlign: 'center', padding: '46px 24px' }}>
+                <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 14 }} aria-hidden="true">
+                  ₹
+                </div>
+                <h2 style={{ margin: '0 0 8px', fontSize: 19 }}>
+                  {site
+                    ? `${site.name} has not been billed yet`
+                    : `No site in ${branch?.name || 'this branch'} has been billed yet`}
+                </h2>
+                <p style={{
+                  margin: '0 auto 20px', maxWidth: 470, color: 'var(--muted)', lineHeight: 1.7,
+                }}>
+                  A profit and loss is revenue less cost, and there is no revenue until a
+                  bill is raised. A work order is what the client agreed to pay, not what
+                  they have been invoiced.
+                </p>
+                <div style={{ display: 'flex', gap: 9, justifyContent: 'center' }}>
+                  <Link className="btn pri"
+                    to={site ? `/billing/site/${site.id}` : '/billing'}>
+                    {site ? `Bill ${site.name}` : 'Bill a site'}
+                  </Link>
+                  <Link className="btn"
+                    to={`/reports/expense${f.site ? `?site=${f.site}` : ''}`}>
+                    See what it has cost
+                  </Link>
+                </div>
               </div>
-              <h2 style={{ margin: '0 0 8px', fontSize: 19 }}>
-                {site
-                  ? `${site.name} has not been billed yet`
-                  : `No site in ${branch?.name || 'this branch'} has been billed yet`}
-              </h2>
-              <p style={{
-                margin: '0 auto 20px', maxWidth: 460, color: 'var(--muted)', lineHeight: 1.7,
-              }}>
-                A profit and loss is revenue less cost, and there is no revenue until a
-                client is invoiced. What {site ? 'this site' : 'the work'} has <em>cost</em>
-                {' '}is known to the rupee — it is on the expense report.
-              </p>
-              <Link className="btn pri"
-                to={`/reports/expense${f.site ? `?site=${f.site}` : ''}`}>
-                See the expense report{site ? ` for ${site.name}` : ''}
-              </Link>
-              <p style={{ marginTop: 22, marginBottom: 0, fontSize: 12, color: 'var(--muted)' }}>
-                This screen fills in on its own once Billing exists. Nothing about the cost
-                side changes when it does.
-              </p>
-            </div>
-          </Card>
-        )}
+            </Card>
+          ) : (
+            <>
+              <div className="stats">
+                <Stat n={money(data.revenue.total)} label="revenue billed" tone="ok" />
+                <Stat n={money(data.cost.total)} label="cost" tone="warn" />
+                <Stat n={money(data.profit.gross)} label="gross profit"
+                  tone={data.profit.gross >= 0 ? 'brand' : 'bad'} />
+                <Stat n={`${data.profit.marginPct}%`} label="margin"
+                  tone={data.profit.marginPct >= 0 ? undefined : 'bad'} />
+                <Stat n={data.revenue.bills} label="bills raised" />
+              </div>
+
+              {data.profit.gross < 0 && (
+                <Banner kind="bad" icon="!">
+                  This scope has cost <b>{money(Math.abs(data.profit.gross))}</b> more than
+                  has been billed. That is normal early on — work is done before it is
+                  certified — but it is worth knowing which it is.
+                </Banner>
+              )}
+              {Number(data.unbilledOrderValue) > 0 && (
+                <Banner kind="info" icon="▸"
+                  action={<Link className="btn sm" to="/billing">Bill a site</Link>}>
+                  <b>{money(data.unbilledOrderValue)}</b> of the work orders here has not
+                  been billed. It is not revenue and is not in any figure above.
+                </Banner>
+              )}
+
+              <div className="grid2">
+                <Card title="Where it went" sub="Revenue against what the work cost">
+                  <div className="pad">
+                    <DonutChart centreLabel="cost" parts={[
+                      { label: 'Material', value: data.cost.material, tone: 'brand' },
+                      { label: 'Labour', value: data.cost.labour, tone: 'warn' },
+                      { label: 'Other expenses', value: data.cost.other, tone: 'navy' },
+                      ...(data.profit.gross > 0
+                        ? [{ label: 'Gross profit', value: data.profit.gross, tone: 'ok' }]
+                        : []),
+                    ]} />
+                  </div>
+                </Card>
+                <Card title="The statement" sub="Revenue less cost">
+                  <div className="tw">
+                    <table>
+                      <tbody>
+                        <tr><td colSpan={2}><b>Revenue</b></td>
+                          <td className="rt mono"><b>{money(data.revenue.total)}</b></td></tr>
+                        <tr><td style={{ paddingLeft: 22 }} colSpan={2}>Supply</td>
+                          <td className="rt mono">{money(data.revenue.supply)}</td></tr>
+                        <tr><td style={{ paddingLeft: 22 }} colSpan={2}>Installation</td>
+                          <td className="rt mono">{money(data.revenue.installation)}</td></tr>
+                        <tr><td colSpan={2} style={{ paddingTop: 14 }}><b>Cost</b></td>
+                          <td className="rt mono" style={{ paddingTop: 14 }}>
+                            <b>{money(data.cost.total)}</b></td></tr>
+                        <tr><td style={{ paddingLeft: 22 }} colSpan={2}>Material consumed</td>
+                          <td className="rt mono">{money(data.cost.material)}</td></tr>
+                        <tr><td style={{ paddingLeft: 22 }} colSpan={2}>Labour</td>
+                          <td className="rt mono">{money(data.cost.labour)}</td></tr>
+                        <tr><td style={{ paddingLeft: 22 }} colSpan={2}>Other expenses</td>
+                          <td className="rt mono">{money(data.cost.other)}</td></tr>
+                        <tr>
+                          <td colSpan={2} style={{ borderTop: '2px solid var(--ink)' }}>
+                            <b style={{ fontSize: 15 }}>Gross profit</b>
+                          </td>
+                          <td className="rt mono" style={{ borderTop: '2px solid var(--ink)' }}>
+                            <b style={{
+                              fontSize: 18,
+                              color: `var(--${data.profit.gross >= 0 ? 'ok' : 'bad'})`,
+                            }}>{money(data.profit.gross)}</b>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+
+              <Card title="By site" sub="Only sites with a bill can show a margin">
+                <div className="tw">
+                  <table>
+                    <thead>
+                      <tr><th>Site</th><th>Client</th><th className="rt">Work order</th>
+                        <th className="rt">Revenue</th><th className="rt">Cost</th>
+                        <th className="rt">Profit</th><th className="rt">Margin</th></tr>
+                    </thead>
+                    <tbody>
+                      {data.sites.map((r) => (
+                        <tr key={r.site_id}>
+                          <td><b>{r.site_name}</b></td>
+                          <td style={{ color: 'var(--muted)' }}>{r.client_name || '—'}</td>
+                          <td className="rt mono">
+                            {Number(r.order_value) ? money(r.order_value) : '—'}
+                          </td>
+                          <td className="rt mono">
+                            {Number(r.bills)
+                              ? money(r.revenue)
+                              : <Tag kind="warn">not billed</Tag>}
+                          </td>
+                          <td className="rt mono">{money(r.cost)}</td>
+                          <td className="rt mono">
+                            {Number(r.bills)
+                              ? <b style={{
+                                color: `var(--${Number(r.profit) >= 0 ? 'ok' : 'bad'})`,
+                              }}>{money(r.profit)}</b>
+                              : <span style={{ color: 'var(--muted)' }}>—</span>}
+                          </td>
+                          <td className="rt mono">
+                            {r.margin_pct == null ? '—' : `${r.margin_pct}%`}
+                          </td>
+                        </tr>
+                      ))}
+                      {!data.sites.length && (
+                        <tr><td colSpan={7}><Empty title="Nothing here yet" /></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </>
+          )}
       </div>
     </>
   );

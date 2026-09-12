@@ -22,18 +22,15 @@
 -- expressed in the client's units.
 CREATE OR REPLACE VIEW v_wo_line_indented AS
 SELECT
-  bwl.wo_line_id,
-  bwl.boq_id,
-  COUNT(bl.id) AS item_count,
-  -- the least-provisioned item is what the line can actually be
-  -- built to. Items with no quantity per unit cannot answer, and are
-  -- left out rather than counted as zero.
-  MIN(CASE WHEN bl.item_qty > 0 THEN m.approved_qty / bl.item_qty END) AS indented_qty,
-  MIN(CASE WHEN bl.item_qty > 0 THEN m.consumed_qty / bl.item_qty END) AS consumed_qty
-FROM boq_wo_lines bwl
-JOIN boq_lines bl            ON bl.boq_wo_line_id = bwl.id
-JOIN v_boq_line_movement m   ON m.boq_line_id = bl.id
-GROUP BY bwl.wo_line_id, bwl.boq_id;
+  s.wo_line_id,
+  s.boq_id,
+  COUNT(*) AS item_count,
+  -- the least-provisioned item is what the line can actually be built
+  -- to. Items with no quantity per unit cannot answer, and are left
+  -- out rather than counted as nothing.
+  MIN(CASE WHEN s.item_qty > 0 THEN s.approved_qty / s.item_qty END) AS indented_qty
+FROM v_boq_line_status s
+GROUP BY s.wo_line_id, s.boq_id;
 
 -- Everything billed against a work order line, across every raised
 -- bill. A draft bill is a working note and is not counted.
@@ -65,7 +62,6 @@ SELECT
   (wol.supply_rate + wol.inst_rate) AS rate,
   wol.line_total AS contract_value,
   COALESCE(ind.indented_qty, 0) AS indented_qty,
-  COALESCE(ind.consumed_qty, 0) AS consumed_qty,
   COALESCE(bd.billed_qty, 0)    AS billed_qty,
   COALESCE(bd.billed_value, 0)  AS billed_value,
   bd.last_ra_no, bd.last_billed_on,

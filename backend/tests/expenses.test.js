@@ -274,18 +274,29 @@ describe('expenses and the cost report', () => {
   });
 
   /* ------------------------------------------------------------- P&L */
-  test('there is no profit and loss, and it says why', async (t) => {
+  test('an unbilled site has no profit and loss, and says why', async (t) => {
     if (!live) return t.skip('no database');
     const r = (await api(`/costs/pl?siteId=${S.site}`)).body;
-    assert.equal(r.available, false);
+    assert.equal(r.available, false, 'this site has never been billed');
     assert.equal(r.blockedBy, 'BILLING');
     assert.match(r.reason, /billed/i);
-    assert.ok(!('revenue' in r), 'nothing here is called revenue');
-    assert.ok(!('profit' in r), 'and nothing claims to be profit');
+    // billing exists now, so the shape is always there — but with
+    // nothing raised, revenue is nought and no profit is claimed
+    assert.equal(Number(r.revenue.total), 0);
+    assert.equal(r.revenue.bills, 0);
 
     const cost = (await api(`/costs/expense?siteId=${S.site}`)).body.totals.total;
     assert.equal(Number(r.cost.total), Number(cost),
-      'the half it can answer agrees with the expense report');
+      'and the cost side agrees with the expense report');
+  });
+
+  test('the cost side splits labour out from the rest', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = (await api(`/costs/pl?siteId=${S.site}`)).body;
+    const st = (await api(`/costs/expense/statement?siteId=${S.site}`)).body;
+    assert.equal(Number(r.cost.material), Number(st.totals.material));
+    assert.equal(Number(r.cost.labour), Number(st.totals.labour));
+    assert.equal(Number(r.cost.other), Number(st.totals.other));
   });
 
   test('the desk counts claims nobody has decided', async (t) => {
