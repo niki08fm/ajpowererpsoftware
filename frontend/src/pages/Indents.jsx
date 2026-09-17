@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { api, qty, dmy, today, addDays } from '../api';
 import { downloadCsv } from '../download';
@@ -18,14 +18,15 @@ export const SeverityTag = ({ severity, pct, count }) => {
 };
 
 /* =================================================================== */
-export function Indents() {
+export function Indents({ basePath = '/site/indents' }) {
+  const isPlanningView = basePath === '/planning/indents';
   const { branchId } = useApp();
   const nav = useNavigate();
   const { data, error, loading, reload } = useApi(
     branchId ? `/indents?branchId=${branchId}` : null, [branchId]);
 
   const row = (i) => (
-    <tr key={i.id} className="click" onClick={() => nav(`/indents/${i.id}`)}>
+    <tr key={i.id} className="click" onClick={() => nav(`${basePath}/${i.id}`)}>
       <td><b>{i.doc_no}</b><small>{i.raised_by_name}</small></td>
       <td>{i.site_name}</td>
       <td className="mono">{dmy(i.indent_date)}<small>{i.needed_by ? `needed ${dmy(i.needed_by)}` : ''}</small></td>
@@ -49,8 +50,11 @@ export function Indents() {
 
   return (
     <>
-      <PageHead title="Indents" sub="What the site needs, measured against its BOQ"
-        actions={<Link className="btn pri" to="/indents/new">Raise indent</Link>} />
+      <PageHead
+        title={isPlanningView ? 'Indents' : 'Indents'}
+        sub={isPlanningView ? 'All indents — approve or return submitted ones' : 'What the site needs, measured against its BOQ'}
+        actions={!isPlanningView && <Link className="btn pri" to={`${basePath}/new`}>Raise indent</Link>}
+      />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
         <Banner kind="info" icon="↗">
@@ -205,11 +209,11 @@ export function IndentCart() {
         await api.put(`/indents/${id}`, body);
         if (send) await api.post(`/indents/${id}/submit`);
         toast(send ? 'Indent submitted' : 'Draft saved', 'ok');
-        nav(`/indents/${id}`);
+        nav(`/site/indents/${id}`);
       } else {
         const r = await api.post('/indents', { ...body, send });
         toast(send ? `${r.docNo} submitted` : `${r.docNo} saved as a draft`, 'ok');
-        nav(`/indents/${r.id}`);
+        nav(`/site/indents/${r.id}`);
       }
     } catch (e) { toast(e.message, 'bad'); }
     setBusy(false);
@@ -224,7 +228,7 @@ export function IndentCart() {
         <div className="page-body">
           <Banner kind="warn" icon="!">
             No site in this branch has a locked BOQ yet. Prepare one first —{' '}
-            <Link to="/boq" style={{ textDecoration: 'underline' }}>go to BOQ</Link>.
+            <Link to="/planning/boq" style={{ textDecoration: 'underline' }}>go to BOQ</Link>.
           </Banner>
         </div>
       </>
@@ -418,7 +422,7 @@ export function IndentCart() {
             <Stat n={overCount} label="past the estimate"
               tone={overCount ? (severity === 'bad' ? 'bad' : 'warn') : undefined} />
             <div style={{ flex: 1 }} />
-            <button className="btn" onClick={() => nav('/indents')}>Cancel</button>
+            <button className="btn" onClick={() => nav('/site/indents')}>Cancel</button>
             <button className="btn" disabled={busy} onClick={() => save(false)}>Save draft</button>
             <button className="btn pri" disabled={busy} onClick={() => save(true)}>Submit indent</button>
           </div>
@@ -477,6 +481,8 @@ function Pipeline({ stage, onOpen }) {
 
 export function IndentDetail() {
   const { id } = useParams();
+  const { pathname } = useLocation();
+  const isPlanningView = pathname.startsWith('/planning/');
   const nav = useNavigate();
   const toast = useToast();
   const { data, error, loading, reload } = useApi(`/indents/${id}`);
@@ -501,14 +507,16 @@ export function IndentDetail() {
     } catch (e) { toast(e.message, 'bad'); }
   };
 
+  const backPath = isPlanningView ? '/planning/indents' : '/site/indents';
+
   return (
     <>
       <PageHead title={data.docNo} sub={`${data.site.name} · against ${data.boqDocNo} · raised by ${data.raisedBy}`}
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={() => nav('/indents')}>Back</button>
-            {data.canEdit && <Link className="btn" to={`/indents/${id}/edit`}>Edit</Link>}
-            {data.canEdit && <button className="btn pri" onClick={submit}>Submit</button>}
+            <button className="btn" onClick={() => nav(backPath)}>Back</button>
+            {!isPlanningView && data.canEdit && <Link className="btn" to={`/site/indents/${id}/edit`}>Edit</Link>}
+            {!isPlanningView && data.canEdit && <button className="btn pri" onClick={submit}>Submit</button>}
             {data.status === 'SUBMITTED' && (
               <>
                 <button className="btn bad" onClick={() => act('RETURNED')}>Return</button>
@@ -616,7 +624,7 @@ export function IndentDetail() {
                           </Tag>}
                       </td>
                       <td className="rt">
-                        <Link className="btn sm" to={`/purchase-orders/${o.id}`}>Open</Link>
+                        <Link className="btn sm" to={`/procure/orders/${o.id}`}>Open</Link>
                       </td>
                     </tr>
                   ))}

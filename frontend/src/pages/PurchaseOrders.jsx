@@ -63,7 +63,7 @@ export function PurchaseOrders() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <Link className="btn pri" to="/procurement">To buy</Link>
+            <Link className="btn pri" to="/procure/demand">To buy</Link>
           </div>
         } />
       <div className="page-body">
@@ -137,8 +137,8 @@ export function PurchaseOrders() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.po_id} className="click"
-                      onClick={() => nav(`/purchase-orders/${r.po_id}`)}>
-                      <td><Link to={`/purchase-orders/${r.po_id}`} onClick={(e) => e.stopPropagation()}>
+                      onClick={() => nav(`/procure/orders/${r.po_id}`)}>
+                      <td><Link to={`/procure/orders/${r.po_id}`} onClick={(e) => e.stopPropagation()}>
                         <b className="mono">{r.doc_no}</b></Link><small>{dmy(r.po_date)}</small></td>
                       <td>{r.supplier_name}</td>
                       <td>{r.deliver_to_name}
@@ -165,7 +165,7 @@ export function PurchaseOrders() {
                   {!rows.length && (
                     <tr><td colSpan={8}>
                       <Empty title="No orders match">
-                        Clear the filters, or raise one from <Link to="/procurement">To buy</Link>.
+                        Clear the filters, or raise one from <Link to="/procure/demand">To buy</Link>.
                       </Empty>
                     </td></tr>
                   )}
@@ -235,7 +235,7 @@ export function PurchaseOrderDetail() {
         sub={`${data.supplier_name} · to ${data.deliver_to_name} · ${dmy(data.po_date)}`}
         actions={
           <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => nav('/purchase-orders')}>Back</button>
+            <button className="btn" onClick={() => nav('/procure/orders')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
             {data.canEdit && <button className="btn pri" onClick={submit}>Send to the GM</button>}
             {data.canSign && (

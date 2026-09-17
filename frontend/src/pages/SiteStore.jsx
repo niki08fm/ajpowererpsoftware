@@ -97,7 +97,7 @@ export function SiteInbox() {
                   <tbody>
                     {data.challans.map((c) => (
                       <tr key={c.dc_id}>
-                        <td><Link to={`/challans/${c.dc_id}`}>
+                        <td><Link to={`/store/challans/${c.dc_id}`}>
                           <b className="mono">{c.doc_no}</b></Link>
                           <small>{dmy(c.dc_date)}</small></td>
                         <td>{c.from_name}</td>
@@ -143,7 +143,7 @@ export function SiteInbox() {
                   <tbody>
                     {data.orders.map((o) => (
                       <tr key={o.po_id}>
-                        <td><Link to={`/purchase-orders/${o.po_id}`}>
+                        <td><Link to={`/procure/orders/${o.po_id}`}>
                           <b className="mono">{o.doc_no}</b></Link>
                           <small>{dmy(o.po_date)}</small></td>
                         <td>{o.supplier_name}</td>

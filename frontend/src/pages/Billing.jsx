@@ -330,7 +330,7 @@ export function BillingSheet() {
 
         {Number(data.totals.unprovisionedValue) > 0 && (
           <Banner kind="info" icon="▸"
-            action={<Link className="btn sm" to={`/indents?site=${siteId}`}>Indents</Link>}>
+            action={<Link className="btn sm" to={`/site/indents?site=${siteId}`}>Indents</Link>}>
             <b>{money(data.totals.unprovisionedValue)}</b> of this work order has no material
             indented for it, so it cannot be billed yet. Billing stops at whatever material
             has been asked for.

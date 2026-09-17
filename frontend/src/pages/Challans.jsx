@@ -191,7 +191,7 @@ export function Challans() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.dc_id}>
-                      <td><Link to={`/challans/${r.dc_id}`}><b className="mono">{r.doc_no}</b></Link>
+                      <td><Link to={`/store/challans/${r.dc_id}`}><b className="mono">{r.doc_no}</b></Link>
                         <small>{dmy(r.dc_date)}{r.vehicle_no ? ` · ${r.vehicle_no}` : ''}</small></td>
                       <td>{r.from_name}</td>
                       <td>{r.to_name}</td>
@@ -324,7 +324,7 @@ export function ChallanDetail() {
         sub={`${data.from_name} → ${data.to_name} · ${dmy(data.dc_date)}`}
         actions={
           <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => nav('/challans')}>Back</button>
+            <button className="btn" onClick={() => nav('/store/challans')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
             <button className="btn" onClick={dcSlip}>Print the challan</button>
             {data.canDispatch && <button className="btn pri" onClick={dispatch}>Dispatch</button>}

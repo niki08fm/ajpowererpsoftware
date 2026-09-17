@@ -30,7 +30,7 @@ export default function Sites() {
       <PageHead
         title="Sites"
         sub="Every project — its client, its team, and the work order it runs on"
-        actions={<Link className="btn pri" to="/sites/new">New site</Link>}
+        actions={<Link className="btn pri" to="/planning/sites/new">New site</Link>}
       />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
@@ -46,7 +46,7 @@ export default function Sites() {
                 </thead>
                 <tbody>
                   {(data || []).map((s) => (
-                    <tr key={s.id} className="click" onClick={() => nav(`/sites/${s.id}`)}>
+                    <tr key={s.id} className="click" onClick={() => nav(`/planning/sites/${s.id}`)}>
                       <td>
                         <b>{s.name}</b>
                         <small>{s.code} · {s.client?.name || 'no client'}{s.location ? ` · ${s.location}` : ''}</small>

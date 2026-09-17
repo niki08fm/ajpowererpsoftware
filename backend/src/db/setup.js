@@ -58,10 +58,15 @@ async function setup({ fresh = false, quiet = false } = {}) {
     ran += 1;
   }
 
-  // seeds run once: if the item master is there, they have been loaded
+  // 001 + 002 are the item master — loaded once, gated on the items table being empty.
+  // 003 + 004 are demo/ERP data — loaded once, gated on the sites table being empty.
+  // Keeping the two gates separate means a reset that preserves the item master
+  // (unlikely, but possible) still gets the demo rows.
+  const DEMO_SEEDS = new Set(['003_demo_data.sql', '004_expanded_data.sql']);
+
   const [[{ n }]] = await conn.query('SELECT COUNT(*) AS n FROM items');
   if (n === 0) {
-    for (const f of files('seeds')) {
+    for (const f of files('seeds').filter((f) => !DEMO_SEEDS.has(f))) {
       process.stdout.write(`  loading ${f} `);
       await conn.query(fs.readFileSync(path.join(__dirname, 'seeds', f), 'utf8'));
       console.log('ok');
@@ -70,6 +75,18 @@ async function setup({ fresh = false, quiet = false } = {}) {
     console.log(`  item master ready: ${c.n} items`);
   } else if (ran || !quiet) {
     say(`  database ready: ${n} items in the master`);
+  }
+
+  // Demo data: inject if no sites exist yet (fresh DB or explicit reset)
+  const [[{ s }]] = await conn.query('SELECT COUNT(*) AS s FROM sites');
+  if (s === 0) {
+    for (const f of [...DEMO_SEEDS]) {
+      process.stdout.write(`  loading ${f} `);
+      await conn.query(fs.readFileSync(path.join(__dirname, 'seeds', f), 'utf8'));
+      console.log('ok');
+    }
+    const [[d]] = await conn.query('SELECT COUNT(*) AS d FROM work_orders');
+    console.log(`  demo data ready: ${d.d} work orders`);
   }
 
   await conn.end();

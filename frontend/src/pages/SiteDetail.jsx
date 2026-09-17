@@ -28,7 +28,7 @@ export default function SiteDetail() {
         sub={`${site.code} · ${site.client?.name || 'no client'} · ${site.branch.name}`}
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={() => nav('/sites')}>Back</button>
+            <button className="btn" onClick={() => nav('/planning/sites')}>Back</button>
             {boq && <button className="btn pri" onClick={() => setSheet(true)}>Open BOQ</button>}
           </div>
         } />

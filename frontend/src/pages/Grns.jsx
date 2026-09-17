@@ -122,7 +122,7 @@ export function ReceiveGrn({ poId, at, atSiteId, onClose, onDone }) {
    The desk: orders still owing, and the notes already raised.
    =================================================================== */
 export function Grns() {
-  const { branchId, storeId } = useApp();
+  const { branchId, storeId, storesLoading } = useApp();
   const [tab, setTab] = useState('pending');
   const [receiving, setReceiving] = useState(null);
   const { data, error, loading, reload } = useApi(
@@ -132,7 +132,7 @@ export function Grns() {
   if (error) {
     return <div className="page-body"><ErrorNote error={error} onRetry={reload} /></div>;
   }
-  if (loading || !data) return <Loading />;
+  if (storesLoading || loading || !data) return <Loading />;
 
   const { place, pending, history, totals } = data;
 
@@ -181,7 +181,7 @@ export function Grns() {
                 <tbody>
                   {pending.map((p) => (
                     <tr key={p.po_id}>
-                      <td><Link to={`/purchase-orders/${p.po_id}`}>
+                      <td><Link to={`/procure/orders/${p.po_id}`}>
                         <b className="mono">{p.doc_no}</b></Link>
                         <small>{dmy(p.po_date)} · {money(p.po_value)}</small></td>
                       <td>{p.supplier_name}</td>
@@ -221,7 +221,7 @@ export function Grns() {
         ) : (
           <Card title="Notes raised here"
             sub="The last 50"
-            actions={<Link className="btn sm" to="/grns/register">Full register</Link>}>
+            actions={<Link className="btn sm" to="/store/grns/register">Full register</Link>}>
             <div className="tw">
               <table>
                 <thead>
@@ -234,9 +234,9 @@ export function Grns() {
                 <tbody>
                   {history.map((g) => (
                     <tr key={g.grn_id}>
-                      <td><Link to={`/grns/${g.grn_id}`}><b className="mono">{g.doc_no}</b></Link>
+                      <td><Link to={`/store/grns/${g.grn_id}`}><b className="mono">{g.doc_no}</b></Link>
                         <small>{dmy(g.receipt_date)}</small></td>
-                      <td><Link to={`/purchase-orders/${g.po_id}`} className="mono">{g.po_no}</Link></td>
+                      <td><Link to={`/procure/orders/${g.po_id}`} className="mono">{g.po_no}</Link></td>
                       <td>{g.supplier_name}</td>
                       <td className="mono">{g.supplier_dc || '—'}</td>
                       <td className="rt mono">{qty(g.grn_qty)}</td>
@@ -304,7 +304,7 @@ export function GrnRegister() {
       <PageHead title="GRN register" sub="Every note, wherever it was taken in"
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
-            <Link className="btn" to="/grns">Back to the desk</Link>
+            <Link className="btn" to="/store/grns">Back to the desk</Link>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
           </div>
         } />
@@ -379,9 +379,9 @@ export function GrnRegister() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.grn_id}>
-                      <td><Link to={`/grns/${r.grn_id}`}><b className="mono">{r.doc_no}</b></Link>
+                      <td><Link to={`/store/grns/${r.grn_id}`}><b className="mono">{r.doc_no}</b></Link>
                         <small>{dmy(r.receipt_date)}</small></td>
-                      <td><Link to={`/purchase-orders/${r.po_id}`} className="mono">{r.po_no}</Link></td>
+                      <td><Link to={`/procure/orders/${r.po_id}`} className="mono">{r.po_no}</Link></td>
                       <td>{r.supplier_name}</td>
                       <td className="mono">{r.supplier_dc || '—'}</td>
                       <td>{r.site_name}<small>{r.site_type === 'STORE' ? 'store' : 'site'}</small></td>
@@ -601,7 +601,7 @@ export function GrnDetail() {
             {data.po && (
               <Card title="Where the order stands">
                 <div className="pad">
-                  <Link to={`/purchase-orders/${data.po.poId}`}>
+                  <Link to={`/procure/orders/${data.po.poId}`}>
                     <b className="mono">{data.po.docNo}</b></Link>
                   <div style={{ margin: '10px 0' }}>
                     <Meter value={Number(data.po.receivedQty)} max={Number(data.po.orderedQty)} />
@@ -652,7 +652,7 @@ export function GrnDetail() {
                           style={s.grn_id === data.grn_id ? { background: 'var(--brand-soft)' } : undefined}>
                           <td>{s.grn_id === data.grn_id
                             ? <b className="mono">{s.doc_no}</b>
-                            : <Link to={`/grns/${s.grn_id}`} className="mono">{s.doc_no}</Link>}
+                            : <Link to={`/store/grns/${s.grn_id}`} className="mono">{s.doc_no}</Link>}
                             <small>{dmy(s.receipt_date)}</small></td>
                           <td className="rt mono">{qty(s.grn_qty)}</td>
                           <td className="rt mono">{money(s.grn_value)}</td>

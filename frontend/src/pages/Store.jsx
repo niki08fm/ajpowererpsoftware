@@ -21,7 +21,7 @@ import { ReceiveGrn } from './Grns';
    The desk.
    =================================================================== */
 export function StoreDesk() {
-  const { branchId, storeId } = useApp();
+  const { branchId, storeId, storesLoading } = useApp();
   const [receiving, setReceiving] = useState(null);
   const { data, error, loading, reload } = useApi(
     branchId && storeId ? `/store/desk?branchId=${branchId}&storeId=${storeId}` : null,
@@ -30,7 +30,14 @@ export function StoreDesk() {
   if (error) {
     return <div className="page-body"><ErrorNote error={error} onRetry={reload} /></div>;
   }
-  if (loading || !data) return <Loading />;
+  if (storesLoading || loading) return <Loading />;
+  if (!storeId) return (
+    <div className="page-body">
+      <Empty title="No store configured for this branch"
+        sub="Ask an administrator to add a store, or select a different branch." />
+    </div>
+  );
+  if (!data) return <Loading />;
 
   const { store, toReceive, inTransit, sitesOwed, held } = data;
   const stale = inTransit.filter((d) => Number(d.days_out) > 3);
@@ -41,7 +48,7 @@ export function StoreDesk() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <Link className="btn" to="/store/prns">PRNs to fulfil</Link>
-            <Link className="btn pri" to="/grns">Acknowledge a delivery</Link>
+            <Link className="btn pri" to="/store/grns">Acknowledge a delivery</Link>
           </div>
         } />
       <div className="page-body">
@@ -55,7 +62,7 @@ export function StoreDesk() {
 
         {stale.length > 0 && (
           <Banner kind="bad" icon="!"
-            action={<Link className="btn sm" to="/challans?state=PENDING">Chase them</Link>}>
+            action={<Link className="btn sm" to="/store/challans?state=PENDING">Chase them</Link>}>
             <b>{stale.length} challan{stale.length === 1 ? '' : 's'} out more than three days</b>{' '}
             with nobody signing. That material is off this store&apos;s books and not yet on any
             site&apos;s.
@@ -74,7 +81,7 @@ export function StoreDesk() {
                   <tbody>
                     {toReceive.map((p) => (
                       <tr key={p.po_id}>
-                        <td><Link to={`/purchase-orders/${p.po_id}`}>
+                        <td><Link to={`/procure/orders/${p.po_id}`}>
                           <b className="mono">{p.doc_no}</b></Link>
                           <small>{money(p.po_value)}</small></td>
                         <td>{p.supplier_name}</td>
@@ -103,7 +110,7 @@ export function StoreDesk() {
 
             <Card title="Out, and nobody has signed"
               sub="Dispatched from here, not yet acknowledged at the site"
-              actions={<Link className="btn sm" to="/challans">All challans</Link>}>
+              actions={<Link className="btn sm" to="/store/challans">All challans</Link>}>
               <div className="tw">
                 <table>
                   <thead>
@@ -113,7 +120,7 @@ export function StoreDesk() {
                   <tbody>
                     {inTransit.map((d) => (
                       <tr key={d.dc_id}>
-                        <td><Link to={`/challans/${d.dc_id}`}>
+                        <td><Link to={`/store/challans/${d.dc_id}`}>
                           <b className="mono">{d.doc_no}</b></Link>
                           <small>{dmy(d.dc_date)}{d.vehicle_no ? ` · ${d.vehicle_no}` : ''}</small></td>
                         <td>{d.to_name}</td>
@@ -181,8 +188,8 @@ export function StoreDesk() {
                   <Stat n={held.items} label="items" />
                   <Stat n={qty(held.qty)} label="units" />
                 </div>
-                <Link className="btn sm" to="/stock">Open the stock</Link>{' '}
-                <Link className="btn sm" to="/movements">Movement</Link>
+                <Link className="btn sm" to="/store/stock">Open the stock</Link>{' '}
+                <Link className="btn sm" to="/store/movements">Movement</Link>
               </div>
             </Card>
           </div>
@@ -476,7 +483,7 @@ export function IssueSheet() {
       toast(dispatch
         ? `${r.docNo} on the road — ${data.site.name} signs for it when it lands`
         : `${r.docNo} saved as a draft`, 'ok');
-      nav(`/challans/${r.id}`);
+      nav(`/store/challans/${r.id}`);
     } catch (e) { toast(e.message, 'bad'); }
     setBusy(false);
     return undefined;
@@ -869,8 +876,8 @@ const KIND = {
  */
 export const DocLink = ({ refType, refId, refNo, onPeek }) => {
   if (!refNo) return <span style={{ color: 'var(--faint)' }}>—</span>;
-  const to = refType === 'DC' ? `/challans/${refId}`
-    : refType === 'GRN' ? `/grns/${refId}` : null;
+  const to = refType === 'DC' ? `/store/challans/${refId}`
+    : refType === 'GRN' ? `/store/grns/${refId}` : null;
   if (!to) return <span className="mono">{refNo}</span>;
   // where a screen can open the document in place, it does; otherwise
   // the number stays an ordinary link rather than a dead button
@@ -933,7 +940,7 @@ export function DocPeek({ doc, onClose }) {
       )}
       {!isDc && data.po && (
         <p style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 0 }}>
-          Against <Link className="mono" to={`/purchase-orders/${data.po.id}`}>{data.po.docNo}</Link>
+          Against <Link className="mono" to={`/procure/orders/${data.po.id}`}>{data.po.docNo}</Link>
         </p>
       )}
 

@@ -76,7 +76,7 @@ export default function Procurement() {
           ? `${chosen[0].doc_no} · ${chosen[0].site_name}`
           : `${chosen.length} indents · ${sitesOf.size} site(s)`,
       });
-      nav(`/comparisons/${r.id}`);
+      nav(`/procure/comparisons/${r.id}`);
     } catch (e) { toast(e.message, 'bad'); }
     setComparing(false);
   };
@@ -311,7 +311,7 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
       });
       toast(submit ? `${r.docNo} sent to the GM` : `${r.docNo} saved as a draft`, 'ok');
       onDone();
-      nav(`/purchase-orders/${r.id}`);
+      nav(`/procure/orders/${r.id}`);
     } catch (e) { toast(e.message, 'bad'); }
     setBusy(false);
     return undefined;

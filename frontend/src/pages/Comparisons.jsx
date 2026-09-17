@@ -40,7 +40,7 @@ export function Comparisons() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <Link className="btn pri" to="/procurement">Start one from an indent</Link>
+            <Link className="btn pri" to="/procure/demand">Start one from an indent</Link>
           </div>
         } />
       <div className="page-body">
@@ -77,7 +77,7 @@ export function Comparisons() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.comparison_id} className="click">
-                      <td><Link to={`/comparisons/${r.comparison_id}`}>
+                      <td><Link to={`/procure/comparisons/${r.comparison_id}`}>
                         <b className="mono">{r.doc_no}</b></Link>
                         <small>{dmy(r.created_at)}</small></td>
                       <td>{r.title || <span style={{ color: 'var(--faint)' }}>—</span>}</td>
@@ -102,7 +102,7 @@ export function Comparisons() {
                   {!rows.length && (
                     <tr><td colSpan={8}>
                       <Empty title="No comparisons yet">
-                        Tick some indents on <Link to="/procurement">To buy</Link> and compare rates
+                        Tick some indents on <Link to="/procure/demand">To buy</Link> and compare rates
                         before raising the order.
                       </Empty>
                     </td></tr>
@@ -244,13 +244,13 @@ export function ComparisonDetail() {
         sub={`${data.item_count} item(s) · ${data.supplier_count} quoting${data.title ? ` · ${data.title}` : ''}`}
         actions={
           <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => nav('/comparisons')}>Back</button>
+            <button className="btn" onClick={() => nav('/procure/comparisons')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
             {data.canEdit && dirty && (
               <button className="btn pri" disabled={busy} onClick={saveRates}>Save rates</button>
             )}
             {data.status === 'DECIDED' && (
-              <Link className="btn pri" to={`/procurement?comparison=${id}`}>Raise the order</Link>
+              <Link className="btn pri" to={`/procure/demand?comparison=${id}`}>Raise the order</Link>
             )}
           </div>
         } />

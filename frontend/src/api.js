@@ -23,6 +23,10 @@ export const setUserId = (id) => {
 };
 export const getUserId = () => userId;
 
+let dept = localStorage.getItem('ajp.dept') || null;
+export const setDept = (d) => { dept = d; localStorage.setItem('ajp.dept', d); };
+export const getDept = () => dept;
+
 async function request(path, { method = 'GET', body, raw } = {}) {
   const headers = {};
   if (userId) headers['X-User-Id'] = String(userId);

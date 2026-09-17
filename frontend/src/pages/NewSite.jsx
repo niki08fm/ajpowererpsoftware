@@ -109,7 +109,7 @@ export default function NewSite() {
         })),
       });
       toast(`${site.name} is live — ${site.code}`, 'ok');
-      nav(`/sites/${site.id}`);
+      nav(`/planning/sites/${site.id}`);
     } catch (e) {
       toast(e instanceof ApiError ? e.message : 'Could not create the site', 'bad');
       setBusy(false);
@@ -201,7 +201,7 @@ export default function NewSite() {
                 </div>
               </div>
               <div style={{ padding: '0 18px 18px', display: 'flex', gap: 9, justifyContent: 'flex-end' }}>
-                <button className="btn" onClick={() => nav('/sites')}>Cancel</button>
+                <button className="btn" onClick={() => nav('/planning/sites')}>Cancel</button>
                 <button className="btn pri" onClick={next}>Add the work order</button>
               </div>
             </Card>

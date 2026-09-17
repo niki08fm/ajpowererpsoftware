@@ -58,6 +58,49 @@ a { color: inherit; text-decoration: none; }
 /* ---------------------------------------------------------- shell */
 .shell { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; overflow: hidden; }
 
+/* dept shell — no rail, single column fills the viewport */
+.shell.dept-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.shell.dept-shell .main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+
+/* ---------------------------------------------------------- login */
+.login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--canvas); padding: 32px 16px;
+}
+.login-box {
+  width: 100%; max-width: 560px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg); padding: 32px;
+}
+.login-brand {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 28px;
+  padding-bottom: 24px; border-bottom: 1px solid var(--line);
+}
+.login-brand .mark {
+  width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center;
+  background: var(--brand); color: #fff; font-weight: 700; font-size: 20px;
+  font-family: 'Playfair Display', serif; flex-shrink: 0;
+}
+.login-dept { margin-bottom: 20px; }
+.login-dept-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px;
+}
+.login-user-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.login-user-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 18px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--card); cursor: pointer; transition: .15s; min-width: 110px;
+  font: inherit;
+}
+.login-user-card:hover { border-color: var(--brand); background: var(--brand-soft); }
+.login-avatar {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--brand-soft);
+  color: var(--brand-ink); display: grid; place-items: center;
+  font-weight: 700; font-size: 14px; font-family: 'Playfair Display', serif;
+}
+.login-user-name { font-size: 13px; font-weight: 500; color: var(--ink); text-align: center; }
+
 .rail {
   background: var(--navy); display: flex; flex-direction: column;
   align-items: center; padding: 12px 0; gap: 2px; overflow: visible; position: relative;
@@ -120,7 +163,7 @@ a { color: inherit; text-decoration: none; }
 .page-head h1 { font-size: 24px; }
 .page-head p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
 .page-head .sp { flex: 1; }
-.page-body { padding: 0 26px 40px; }
+.page-body { padding: 16px 26px 40px; }
 
 /* The section tab bar, as in the prototype: the rail picks a
    department, these pick the screen within it. */
@@ -309,7 +352,7 @@ select.inp { appearance: none; background-image: linear-gradient(45deg,transpare
 .meter i { display: block; height: 100%; background: var(--brand); border-radius: inherit; transition: width .3s; }
 .meter.over i { background: var(--bad); }
 
-.stats { display: flex; gap: 26px; flex-wrap: wrap; align-items: center; }
+.stats { display: flex; gap: 26px; flex-wrap: wrap; align-items: center; margin: 16px 0; padding: 10px 0; }
 .stat .n { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .stat .l { font-size: 11.5px; color: var(--muted); }
 
