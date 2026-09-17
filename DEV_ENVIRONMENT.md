@@ -4,20 +4,20 @@
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Database | MySQL 8.4 | installed locally via winget |
-| Backend runtime | Node.js | 26.x |
+| Database | MySQL 8.4 | installed locally |
+| Backend | Node.js | 26.x |
 | Backend framework | Express | 4.x |
 | Backend validation | Zod | 3.x |
-| Backend DB driver | mysql2 | 3.x |
-| Frontend runtime | React | 18.x |
-| Frontend bundler | Vite | 5.x |
-| Frontend router | react-router-dom | 6.x |
+| DB driver | mysql2 | 3.x |
+| Frontend | React | 18.x |
+| Bundler | Vite | 5.x |
+| Router | react-router-dom | 6.x |
 
-No ORM. Raw SQL via `mysql2` pool with helper functions. No TypeScript on either end.
+No ORM. Raw SQL via `mysql2` pool with helper functions. No TypeScript.
 
 ---
 
-## Starting All Servers (One Command)
+## Starting Everything
 
 From the project root in PowerShell:
 
@@ -25,22 +25,22 @@ From the project root in PowerShell:
 .\start.ps1
 ```
 
-This starts MySQL, the backend (port 4000), and the frontend (port 5173) — each in their own window.
+Starts MySQL, backend (port 4000), and frontend (port 5173) — each in their own window.
 
-- Frontend → http://localhost:5173
-- Backend  → http://localhost:4000
-- MySQL    → localhost:3306
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5173 |
+| Backend | http://localhost:4000 |
+| MySQL | localhost:3306 |
 
 ---
 
-## MySQL Setup (Local — No Docker)
+## MySQL Setup (Windows, No Docker)
 
-MySQL 8.4 is installed at `C:\Program Files\MySQL\MySQL Server 8.4\`.
+MySQL 8.4 is installed at `C:\Program Files\MySQL\MySQL Server 8.4\`.  
 Data directory: `C:\Users\JakkaAbhilashReddy\mysql-data`
 
-MySQL runs as a **detached process** started by `start.ps1`. It survives terminal closes but not reboots.
-
-**After a reboot**, either run `.\start.ps1` (it starts MySQL automatically) or register it as a permanent Windows service (run once as Administrator):
+MySQL runs as a detached process started by `start.ps1`. **After a reboot**, either run `.\start.ps1` or register it as a permanent Windows service (run once as Administrator):
 
 ```powershell
 & "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" --install MySQL84 --datadir="C:\Users\JakkaAbhilashReddy\mysql-data"
@@ -49,7 +49,7 @@ Start-Service MySQL84
 
 ---
 
-## Environment Variables (Backend)
+## Environment Variables
 
 File: `backend/.env`
 
@@ -72,9 +72,9 @@ Root has no password (installed with `--initialize-insecure`).
 
 | Command | What it does |
 |---------|-------------|
-| `npm run dev` | Runs migrations/seeds then starts with `--watch` (auto-restart) |
+| `npm run dev` | Runs migrations + seeds then starts with `--watch` |
 | `npm start` | Same without `--watch` |
-| `npm run db:reset` | **Destructive** — drops and recreates full schema + seeds |
+| `npm run db:reset` | **Destructive** — drops DB, reruns all 23 migrations + all 4 seeds |
 | `npm test` | Runs all backend tests |
 
 ### Frontend (`cd frontend`)
@@ -93,17 +93,38 @@ Root has no password (installed with `--initialize-insecure`).
 
 ---
 
-## Database Management
+## Database Reset & Seeds
 
 ```powershell
-# Full reset — drops everything, reruns all 23 migrations + seeds
-cd backend; npm run db:reset
-
-# Connect directly
-& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -uroot ajp_erp
+cd backend
+npm run db:reset
 ```
 
-The migration runner (`setup.js`) is idempotent — tracks applied migrations in `migration_log`, skips already-run ones. Only `--fresh` drops and recreates.
+This drops and recreates the database, applies all 23 migrations in order, then loads 4 seed files:
+
+| Seed | Contents |
+|------|----------|
+| `001_reference.sql` | 2 branches, 5 users, 3 clients |
+| `002_items.sql` | 2,607 electrical items |
+| `003_demo_data.sql` | 3 work orders with full lifecycle (GMR T2, Brigade, Salarpuria) |
+| `004_expanded_data.sql` | 5 more sites + WOs, all dashboard states populated |
+
+Seeds are idempotent — running `npm run dev` on an already-populated DB is safe (seeds only fire when the respective gate table is empty).
+
+**After reset the DB has:**
+- 7 clients, 5 suppliers, 4 stores (2 HYD + 2 BLR), 8 project sites
+- 8 work orders, 10 indents (DRAFT/SUBMITTED/APPROVED)
+- 8 purchase orders (DRAFT/SUBMITTED/APPROVED), 5 GRNs, 7 challans
+- 18 expenses across 6 sites, 7 bills (4 RAISED + 3 DRAFT)
+- 43 stock movements
+
+---
+
+## Direct MySQL Access
+
+```powershell
+& "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -uroot ajp_erp
+```
 
 ---
 
@@ -111,17 +132,5 @@ The migration runner (`setup.js`) is idempotent — tracks applied migrations in
 
 ```powershell
 Invoke-RestMethod http://localhost:4000/health
-# → ok: True, at: ...
+# → ok: True
 ```
-
----
-
-## Seeded Reference Data
-
-After `db:reset`, the database contains:
-- **2 branches**: Hyderabad (HYD), Bengaluru (BLR)
-- **5 users**: Suresh Rao (Planning), Ravi Kumar (Site), Vikram Nair (Site), Imran Sheikh (Store), Anil Menon (Management)
-- **2,607 items** in the electrical item master
-- **10 expense categories** (Transport, Fuel, Freight, Food, etc.)
-
-The "Working as" dropdown in the app top bar selects among these users.

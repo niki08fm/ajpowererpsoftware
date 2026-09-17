@@ -378,8 +378,11 @@ export function Prns() {
                           style={{ color: Number(r.can_send_qty) > 0 ? 'var(--ok)' : 'var(--faint)' }}>
                           {Number(r.can_send_qty) ? qty(r.can_send_qty) : 'nothing held'}
                         </td>
-                        <td className="rt">
+                        <td className="rt" style={{ whiteSpace: 'nowrap' }}>
                           <Link className="btn sm" to={`/store/issue?prns=${r.indent_id}${carry}`}>Issue</Link>
+                          {Number(r.to_deliver_qty) > 0 && (
+                            <Link className="btn sm" style={{ marginLeft: 6 }} to={`/store/source?prn=${r.indent_id}${carry}`}>From a site</Link>
+                          )}
                         </td>
                       </tr>
                     );
@@ -451,7 +454,6 @@ export function IssueSheet() {
   const shelfItems = shelf.filter((v) => v.held > 0).length;
   const lines = (data?.lines || []).filter((l) => Number(send[key(l)]) > 0);
   const total = lines.reduce((t, l) => t + Number(send[key(l)]), 0);
-  const value = lines.reduce((t, l) => t + Number(send[key(l)]) * l.rate, 0);
 
   if (loading) return <Loading />;
   if (error) {
@@ -672,7 +674,6 @@ export function IssueSheet() {
           <div className="pad" style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <Stat n={lines.length} label="rows" />
             <Stat n={qty(total)} label="units going" />
-            <Stat n={money(value)} label="leaving the shelf" tone="brand" />
             <div style={{ flex: 1 }} />
             <button className="btn" disabled={busy || over.length > 0}
               onClick={() => save(false)}>Save draft</button>

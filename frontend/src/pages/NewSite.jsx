@@ -132,7 +132,7 @@ export default function NewSite() {
                 </Field>
                 <div className="row2">
                   <Field label="Client">
-                    <ClientPicker value={p.clientId} branchId={branchId} branches={branches}
+                    <ClientPicker value={p.clientId} branchId={branchId}
                       width={250}
                       onChange={(v) => setP((x) => ({ ...x, clientId: v }))} />
                   </Field>

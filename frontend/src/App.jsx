@@ -9,6 +9,8 @@ import NewSite from './pages/NewSite';
 import SiteDetail from './pages/SiteDetail';
 import Stores from './pages/Stores';
 import Items from './pages/Items';
+import Clients from './pages/Clients';
+import { SiteTransfers, SentAndReorder, SourceFromSitePage, StoreTransfers } from './pages/Transfers';
 import Procurement from './pages/Procurement';
 import Suppliers from './pages/Suppliers';
 import { PurchaseOrders, PurchaseOrderDetail } from './pages/PurchaseOrders';
@@ -93,6 +95,7 @@ function DeptTopBar({ branchId, branches, setBranch, me, showStore, stores, stor
    ================================================================= */
 const PLANNING_SCREENS = [
   { to: '/planning/sites',   label: 'Sites' },
+  { to: '/planning/clients', label: 'Clients' },
   { to: '/planning/stores',  label: 'Stores' },
   { to: '/planning/boq',     label: 'BOQ',        badge: 'amendmentDue' },
   { to: '/planning/items',   label: 'Item master' },
@@ -132,6 +135,8 @@ const SITE_SCREENS = [
   { to: '/site/indents',      label: 'Indents',          badge: 'indentsWaiting' },
   { to: '/site/inbox',        label: 'Acknowledgements' },
   { to: '/site/stock',        label: 'Site store' },
+  { to: '/site/transfers',    label: 'Transfers out' },
+  { to: '/site/sent',         label: 'Sent & reorder' },
   { to: '/site/issue',        label: 'Issue material' },
   { to: '/site/returns',      label: 'Returns' },
   { to: '/site/transactions', label: 'Transactions' },
@@ -170,12 +175,14 @@ function SiteShell() {
    Store shell
    ================================================================= */
 const STORE_SCREENS = [
-  { to: '/store',           label: 'Store desk',    end: true },
-  { to: '/store/prns',      label: 'PRNs to fulfil' },
-  { to: '/store/grns',      label: 'GRN' },
-  { to: '/store/challans',  label: 'Challans' },
-  { to: '/store/stock',     label: 'Stock' },
-  { to: '/store/movements', label: 'Movements' },
+  { to: '/store',              label: 'Store desk',       end: true },
+  { to: '/store/prns',         label: 'PRNs to fulfil' },
+  { to: '/store/transfers',    label: 'Transfer requests' },
+  { to: '/store/grns',         label: 'GRN' },
+  { to: '/store/challans',     label: 'Challans' },
+  { to: '/store/stock',        label: 'Stock' },
+  { to: '/store/movements',    label: 'Movements' },
+  { to: '/store/items',        label: 'Item master' },
 ];
 
 function StoreShell() {
@@ -359,6 +366,7 @@ export default function App() {
               <Route path="/planning/items" element={<Items />} />
               <Route path="/planning/indents" element={<Indents basePath="/planning/indents" />} />
               <Route path="/planning/indents/:id" element={<IndentDetail />} />
+              <Route path="/planning/clients" element={<Clients />} />
             </Route>
 
             {/* ── Site department ───────────────────────────────── */}
@@ -376,6 +384,8 @@ export default function App() {
               <Route path="/site/audit" element={<Audit />} />
               <Route path="/site/consumption" element={<Consumed />} />
               <Route path="/site/expenses" element={<Expenses />} />
+              <Route path="/site/transfers" element={<SiteTransfers />} />
+              <Route path="/site/sent" element={<SentAndReorder />} />
             </Route>
 
             {/* ── Store department ──────────────────────────────── */}
@@ -390,6 +400,9 @@ export default function App() {
               <Route path="/store/challans/:id" element={<ChallanDetail />} />
               <Route path="/store/stock" element={<Stock />} />
               <Route path="/store/movements" element={<Movements />} />
+              <Route path="/store/transfers" element={<StoreTransfers />} />
+              <Route path="/store/source" element={<SourceFromSitePage />} />
+              <Route path="/store/items" element={<Items />} />
             </Route>
 
             {/* ── Procure department ───────────────────────────── */}

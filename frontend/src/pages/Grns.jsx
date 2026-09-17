@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today } from '../api';
+import { api, qty, dmy, today } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -86,7 +86,6 @@ export function ReceiveGrn({ poId, at, atSiteId, onClose, onDone }) {
               <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 60 }}>Unit</th>
               <th className="rt" style={{ width: 88 }}>Ordered</th>
               <th className="rt" style={{ width: 92 }}>Still owed</th>
-              <th className="rt" style={{ width: 82 }}>Rate</th>
               <th className="rt" style={{ width: 100 }}>Arrived</th>
             </tr>
           </thead>
@@ -98,7 +97,6 @@ export function ReceiveGrn({ poId, at, atSiteId, onClose, onDone }) {
                 <td>{l.item_name}</td><td>{l.uom}</td>
                 <td className="rt mono">{qty(l.ordered_qty)}</td>
                 <td className="rt mono"><b>{qty(l.pending_qty)}</b></td>
-                <td className="rt mono">{money(l.rate)}</td>
                 <td><input className="inp rt" type="number" min="0" step="any" placeholder="—"
                   value={got[l.po_line_id] ?? ''}
                   onChange={(e) => setGot((x) => ({ ...x, [l.po_line_id]: e.target.value }))} /></td>
@@ -183,7 +181,7 @@ export function Grns() {
                     <tr key={p.po_id}>
                       <td><Link to={`/procure/orders/${p.po_id}`}>
                         <b className="mono">{p.doc_no}</b></Link>
-                        <small>{dmy(p.po_date)} · {money(p.po_value)}</small></td>
+                        <small>{dmy(p.po_date)}</small></td>
                       <td>{p.supplier_name}</td>
                       <td><small className="mono">{p.prns || '—'}</small></td>
                       <td>
@@ -227,7 +225,7 @@ export function Grns() {
                 <thead>
                   <tr>
                     <th>Note</th><th>Order</th><th>Supplier</th><th>Their DC</th>
-                    <th className="rt">Units</th><th className="rt">Value</th>
+                    <th className="rt">Units</th>
                     <th>Taken in by</th><th />
                   </tr>
                 </thead>
@@ -240,7 +238,6 @@ export function Grns() {
                       <td>{g.supplier_name}</td>
                       <td className="mono">{g.supplier_dc || '—'}</td>
                       <td className="rt mono">{qty(g.grn_qty)}</td>
-                      <td className="rt mono">{money(g.grn_value)}</td>
                       <td>{g.received_by_name || '—'}</td>
                       <td>
                         {g.status === 'DRAFT' ? <Tag kind="warn">Not in stock</Tag> : null}
@@ -249,7 +246,7 @@ export function Grns() {
                     </tr>
                   ))}
                   {!history.length && (
-                    <tr><td colSpan={8}>
+                    <tr><td colSpan={7}>
                       <Empty title="Nothing has been taken in yet">
                         Acknowledge a delivery and its note appears here.
                       </Empty>
@@ -293,10 +290,9 @@ export function GrnRegister() {
 
   const grab = () => downloadCsv('grn-register', [
     ['Note', 'Date', 'Order', 'Supplier', 'Their DC', 'Taken in at', 'Lines', 'Units',
-      'Basic', 'GST', 'Value', 'Days late', 'Status'],
+      'Days late', 'Status'],
     ...rows.map((r) => [r.doc_no, dmy(r.receipt_date), r.po_no, r.supplier_name,
-      r.supplier_dc || '', r.site_name, r.line_count, r.grn_qty, r.grn_basic, r.grn_gst,
-      r.grn_value, r.days_late, r.status]),
+      r.supplier_dc || '', r.site_name, r.line_count, r.grn_qty, r.days_late, r.status]),
   ]);
 
   return (
@@ -359,7 +355,6 @@ export function GrnRegister() {
           <div className="stats">
             <Stat n={data.totals.notes} label="notes" />
             <Stat n={qty(data.totals.qty)} label="units taken in" />
-            <Stat n={money(data.totals.value)} label="at order rates" tone="brand" />
             <Stat n={data.totals.late} label="arrived late"
               tone={data.totals.late ? 'bad' : undefined} />
           </div>
@@ -373,7 +368,7 @@ export function GrnRegister() {
                   <tr>
                     <th>Note</th><th>Order</th><th>Supplier</th><th>Their DC</th>
                     <th>Taken in at</th><th className="rt">Lines</th><th className="rt">Units</th>
-                    <th className="rt">Value</th><th />
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -387,7 +382,6 @@ export function GrnRegister() {
                       <td>{r.site_name}<small>{r.site_type === 'STORE' ? 'store' : 'site'}</small></td>
                       <td className="rt mono">{r.line_count}</td>
                       <td className="rt mono">{qty(r.grn_qty)}</td>
-                      <td className="rt mono">{money(r.grn_value)}</td>
                       <td>
                         {r.status === 'DRAFT' && <Tag kind="warn">Not in stock</Tag>}
                         {Number(r.days_late) > 0 && <Tag kind="bad">{r.days_late}d late</Tag>}
@@ -395,7 +389,7 @@ export function GrnRegister() {
                     </tr>
                   ))}
                   {!rows.length && (
-                    <tr><td colSpan={9}><Empty title="No notes match" /></td></tr>
+                    <tr><td colSpan={8}><Empty title="No notes match" /></td></tr>
                   )}
                 </tbody>
               </table>
@@ -444,13 +438,10 @@ export function GrnDetail() {
     ],
     columns: [
       { label: 'Code' }, { label: 'Item' }, { label: 'Unit' },
-      { label: 'Received', rt: true }, { label: 'Rate', rt: true },
-      { label: 'Value', rt: true },
+      { label: 'Received', rt: true },
     ],
-    rows: data.lines.map((l) => [l.item_code, l.item_name, l.uom,
-      qty(l.qty), money(l.rate), money(l.line_value)]),
-    totals: ['', '', 'Total', qty(data.grn_qty), '', money(data.grn_value)],
-    note: `${money(data.grn_basic)} plus ${money(data.grn_gst)} GST.`,
+    rows: data.lines.map((l) => [l.item_code, l.item_name, l.uom, qty(l.qty)]),
+    totals: ['', '', 'Total', qty(data.grn_qty)],
     footer: data.status === 'CONFIRMED'
       ? 'This material is on the shelf.'
       : 'DRAFT — this material is not on the shelf yet.',
@@ -463,11 +454,10 @@ export function GrnDetail() {
     ['Their challan', data.supplier_dc || ''],
     ['Taken in at', data.site_name], ['Taken in by', data.received_by_name || ''],
     ['Status', data.status], [],
-    ['Code', 'Item', 'Unit', 'Ordered', 'This note', 'Received in all', 'Still owed',
-      'Rate', 'Basic', 'GST', 'Value', 'Answering'],
+    ['Code', 'Item', 'Unit', 'Ordered', 'This note', 'Received in all', 'Still owed', 'Answering'],
     ...data.lines.map((l) => [l.item_code, l.item_name, l.uom, l.ordered_qty, l.qty,
-      l.received_qty, l.pending_qty, l.rate, l.basic, l.gst_amt, l.line_value, l.against || '']),
-    [], ['', '', '', '', data.grn_qty, '', '', '', data.grn_basic, data.grn_gst, data.grn_value],
+      l.received_qty, l.pending_qty, l.against || '']),
+    [], ['', '', '', '', data.grn_qty, '', '', ''],
   ]);
 
   return (
@@ -506,8 +496,7 @@ export function GrnDetail() {
                     <tr>
                       <th style={{ width: 98 }}>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
                       <th className="rt">Ordered</th><th className="rt">This note</th>
-                      <th className="rt">Still owed</th><th className="rt">Rate</th>
-                      <th className="rt">Value</th>
+                      <th className="rt">Still owed</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -523,9 +512,6 @@ export function GrnDetail() {
                           style={{ color: Number(l.pending_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
                           {Number(l.pending_qty) > 0 ? qty(l.pending_qty) : 'nil'}
                         </td>
-                        <td className="rt mono">{money(l.rate)}</td>
-                        <td className="rt mono">{money(l.line_value)}
-                          <small>+{l.gst_rate}% GST</small></td>
                       </tr>
                     ))}
                   </tbody>
@@ -533,8 +519,6 @@ export function GrnDetail() {
                     <tr>
                       <th colSpan={4} className="rt">Total</th>
                       <th className="rt mono">{qty(data.grn_qty)}</th>
-                      <th colSpan={2} className="rt">{money(data.grn_basic)} + {money(data.grn_gst)}</th>
-                      <th className="rt mono">{money(data.grn_value)}</th>
                     </tr>
                   </tfoot>
                 </table>
@@ -548,7 +532,7 @@ export function GrnDetail() {
                   <table>
                     <thead>
                       <tr><th>Date</th><th>Item</th><th className="rt">In</th>
-                        <th className="rt">At</th><th>Where</th></tr>
+                        <th>Where</th></tr>
                     </thead>
                     <tbody>
                       {data.moves.map((m) => (
@@ -556,7 +540,6 @@ export function GrnDetail() {
                           <td>{dmy(m.moved_on)}</td>
                           <td>{m.item_name}<small className="mono">{m.item_code}</small></td>
                           <td className="rt mono" style={{ color: 'var(--ok)' }}>+{qty(m.qty)}</td>
-                          <td className="rt mono">{money(m.rate)}</td>
                           <td>{m.site_name}</td>
                         </tr>
                       ))}
@@ -655,7 +638,6 @@ export function GrnDetail() {
                             : <Link to={`/store/grns/${s.grn_id}`} className="mono">{s.doc_no}</Link>}
                             <small>{dmy(s.receipt_date)}</small></td>
                           <td className="rt mono">{qty(s.grn_qty)}</td>
-                          <td className="rt mono">{money(s.grn_value)}</td>
                         </tr>
                       ))}
                     </tbody>

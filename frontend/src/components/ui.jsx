@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 
 /* --------------------------------------------------------- toasts */
@@ -210,12 +211,13 @@ export function ItemPicker({ value, onPick, placeholder = 'Search the item maste
    back with the existing client's id, and rather than make the user
    read an error and go looking, that client is simply selected. */
 export function ClientPicker({
-  value, onChange, branchId, branches, width = 260, autoFocus,
+  value, onChange, branchId, width = 260, autoFocus,
 }) {
   const [adding, setAdding] = useState(false);
-  const { data, reload } = useApi(branchId ? `/masters/clients?branchId=${branchId}` : null,
-    [branchId]);
+  const { data: all, reload } = useApi('/masters/clients');
+  const { data } = useApi(branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
   const clients = data || [];
+  const elsewhere = (all || []).length - clients.length;
 
   return (
     <>
@@ -237,8 +239,15 @@ export function ClientPicker({
         <button type="button" className="btn" title="Add a client"
           onClick={() => setAdding(true)}>+</button>
       </div>
+      {elsewhere > 0 && (
+        <div className="hint" style={{ marginTop: 5 }}>
+          {elsewhere} more client{elsewhere === 1 ? '' : 's'} on the other branch — a site can only
+          be given a client of its own branch.{' '}
+          <Link to="/planning/clients" style={{ color: 'var(--brand-ink)' }}>See all clients</Link>
+        </div>
+      )}
       {adding && (
-        <NewClient branchId={branchId} branches={branches}
+        <NewClient branchId={branchId}
           onClose={() => setAdding(false)}
           onSaved={(id) => { reload(); onChange(String(id)); setAdding(false); }} />
       )}
@@ -246,7 +255,7 @@ export function ClientPicker({
   );
 }
 
-function NewClient({ branchId, branches, onClose, onSaved }) {
+function NewClient({ branchId, onClose, onSaved }) {
   const toast = useToast();
   const [f, setF] = useState({
     name: '', gstin: '', branchId: String(branchId || ''), address: '',
@@ -301,19 +310,11 @@ function NewClient({ branchId, branches, onClose, onSaved }) {
           onChange={set('name')}
           onKeyDown={(e) => { if (e.key === 'Enter' && ready) save(); }} />
       </Field>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <Field label="GSTIN" hint={gstinBad ? 'A GSTIN is 15 characters' : 'Optional'}>
-          <input className="inp mono" style={{ width: 220 }} value={f.gstin}
-            placeholder="36AABCP1234M1Z5" maxLength={15}
-            onChange={(e) => setF((x) => ({ ...x, gstin: e.target.value.toUpperCase() }))} />
-        </Field>
-        <Field label="Branch">
-          <select className="inp" style={{ width: 200 }} value={f.branchId}
-            onChange={set('branchId')}>
-            {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        </Field>
-      </div>
+      <Field label="GSTIN" hint={gstinBad ? 'A GSTIN is 15 characters' : 'Optional'}>
+        <input className="inp mono" style={{ width: 220 }} value={f.gstin}
+          placeholder="36AABCP1234M1Z5" maxLength={15}
+          onChange={(e) => setF((x) => ({ ...x, gstin: e.target.value.toUpperCase() }))} />
+      </Field>
       <Field label="Address" hint="Optional">
         <input className="inp" value={f.address} onChange={set('address')} />
       </Field>
