@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today } from '../api';
+import { api, qty, dmy, today } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Meter, useToast,
@@ -97,9 +97,9 @@ export function Challans() {
 
   const grab = () => downloadCsv('challans', [
     ['Challan', 'Date', 'From', 'To', 'Vehicle', 'Lines', 'Sent', 'Signed for',
-      'In transit', 'Value', 'Days out', 'State'],
+      'In transit', 'Days out', 'State'],
     ...rows.map((r) => [r.doc_no, dmy(r.dc_date), r.from_name, r.to_name, r.vehicle_no || '',
-      r.line_count, r.sent_qty, r.acked_qty, r.in_transit_qty, r.dc_value, r.days_out,
+      r.line_count, r.sent_qty, r.acked_qty, r.in_transit_qty, r.days_out,
       (STATE[r.state] || {}).label || r.state]),
   ]);
 
@@ -184,7 +184,7 @@ export function Challans() {
                   <tr>
                     <th>Challan</th><th>From</th><th>To</th><th>Answering</th>
                     <th className="rt">Sent</th><th style={{ width: 140 }}>Signed for</th>
-                    <th className="rt">In transit</th><th className="rt">Value</th>
+                    <th className="rt">In transit</th>
                     <th>State</th><th className="rt">Days out</th>
                   </tr>
                 </thead>
@@ -205,7 +205,6 @@ export function Challans() {
                         style={{ color: Number(r.in_transit_qty) > 0 ? 'var(--bad)' : undefined }}>
                         {Number(r.in_transit_qty) ? <b>{qty(r.in_transit_qty)}</b> : 'nil'}
                       </td>
-                      <td className="rt mono">{money(r.dc_value)}</td>
                       <td><DcTag state={r.state} /></td>
                       <td className="rt mono">
                         {Number(r.days_out) > 3
@@ -312,10 +311,10 @@ export function ChallanDetail() {
     ['From', data.from_name], ['To', data.to_name],
     ['Date', dmy(data.dc_date)], ['Vehicle', data.vehicle_no || ''], ['Driver', data.driver || ''],
     ['State', (STATE[data.state] || {}).label || data.state], [],
-    ['Code', 'Item', 'Unit', 'Sent', 'Received at site', 'Still pending', 'Rate', 'Value', 'Against'],
+    ['Code', 'Item', 'Unit', 'Sent', 'Received at site', 'Still pending', 'Against'],
     ...data.lines.map((l) => [l.item_code, l.item_name, l.uom, l.sent_qty, l.acked_qty,
-      l.in_transit_qty, l.rate, l.line_value, l.against || '']),
-    [], ['', '', '', data.sent_qty, data.acked_qty, data.in_transit_qty, '', data.dc_value],
+      l.in_transit_qty, l.against || '']),
+    [], ['', '', '', data.sent_qty, data.acked_qty, data.in_transit_qty],
   ]);
 
   return (
@@ -360,7 +359,7 @@ export function ChallanDetail() {
                     <tr>
                       <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 60 }}>Unit</th>
                       <th className="rt">Sent</th><th className="rt">Received at site</th>
-                      <th className="rt">Still pending</th><th className="rt">Value</th>
+                      <th className="rt">Still pending</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -376,7 +375,6 @@ export function ChallanDetail() {
                           style={{ color: Number(l.in_transit_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
                           <b>{Number(l.in_transit_qty) ? qty(l.in_transit_qty) : 'nil'}</b>
                         </td>
-                        <td className="rt mono">{money(l.line_value)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -386,7 +384,6 @@ export function ChallanDetail() {
                       <th className="rt mono">{qty(data.sent_qty)}</th>
                       <th className="rt mono">{qty(data.acked_qty)}</th>
                       <th className="rt mono">{qty(data.in_transit_qty)}</th>
-                      <th className="rt mono">{money(data.dc_value)}</th>
                     </tr>
                   </tfoot>
                 </table>

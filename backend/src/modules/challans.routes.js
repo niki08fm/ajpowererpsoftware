@@ -132,6 +132,9 @@ router.get('/:id', wrap(async (req, res) => {
 const lineShape = z.object({
   // which PRN this quantity answers — optional, see writeLines
   indentId: z.coerce.number().int().positive().optional(),
+  // or which transfer request, when the store has asked this site to
+  // send material to another site against that site's PRN
+  trId: z.coerce.number().int().positive().optional(),
   itemId: z.coerce.number().int().positive(),
   makeId: z.coerce.number().int().positive().nullable().optional(),
   qty: z.coerce.number().positive(),
@@ -166,9 +169,10 @@ async function writeLines(conn, dcId, fromSiteId, toSiteId, lines) {
   for (const l of lines) {
     const key = `${l.itemId}:${l.makeId || 0}`;
     const at = byItem.get(key) || { itemId: l.itemId, makeId: l.makeId || null, qty: 0,
-      remark: l.remark || null, prns: [] };
+      remark: l.remark || null, prns: [], trs: [] };
     at.qty = round3(at.qty + Number(l.qty));
     if (l.indentId) at.prns.push({ indentId: l.indentId, qty: Number(l.qty) });
+    if (l.trId) at.trs.push({ trId: l.trId, qty: Number(l.qty) });
     byItem.set(key, at);
   }
 
@@ -184,6 +188,28 @@ async function writeLines(conn, dcId, fromSiteId, toSiteId, lines) {
         throw badRequest(`${ind.doc_no} belongs to another site. One challan goes to one site.`);
       }
       if (ind.status !== 'APPROVED') throw conflict(`${ind.doc_no} is not approved`);
+    }
+  }
+
+  // a transfer request named on a line has to be accepted, and has to
+  // be this pair of sites, in this direction
+  const namedTrs = [...new Set(lines.filter((l) => l.trId).map((l) => l.trId))];
+  const trIndent = new Map();
+  if (namedTrs.length) {
+    const rows = await many(
+      `SELECT id, doc_no, from_site_id, to_site_id, indent_id, status
+         FROM transfer_requests WHERE id IN (?)`, [namedTrs], conn);
+    for (const id of namedTrs) {
+      const r = rows.find((x) => x.id === id);
+      if (!r) throw badRequest('One of those transfer requests does not exist');
+      if (r.status !== 'ACCEPTED') {
+        throw conflict(`${r.doc_no} has not been accepted, so nothing can be sent against it`);
+      }
+      if (r.from_site_id !== fromSiteId || r.to_site_id !== toSiteId) {
+        throw badRequest(`${r.doc_no} is between two other sites`);
+      }
+      // the request exists to answer a PRN, so the quantity answers it
+      trIndent.set(id, r.indent_id);
     }
   }
 
@@ -208,6 +234,37 @@ async function writeLines(conn, dcId, fromSiteId, toSiteId, lines) {
       [dcId, l.itemId, l.makeId, item.uom_id, l.qty, Number(st?.latest_rate || 0),
        l.remark || null], conn);
 
+    for (const t of l.trs) {
+      const asked = await one(
+        `SELECT requested_qty, sent_qty FROM v_tr_line_status WHERE tr_id = ? AND item_id = ?`,
+        [t.trId, l.itemId], conn);
+      if (!asked) throw badRequest(`${item.code} — ${item.name} is not on that transfer request`);
+      const room = round3(Number(asked.requested_qty) - Number(asked.sent_qty));
+      if (t.qty > room + 0.0005) {
+        const r = await one(`SELECT doc_no FROM transfer_requests WHERE id = ?`, [t.trId], conn);
+        throw conflict(
+          `${item.code} — ${item.name}: ${r.doc_no} still asks for ${round3(room)}, `
+          + `so ${t.qty} cannot be sent against it.`,
+          { trId: t.trId, itemId: l.itemId, available: Math.max(room, 0) }
+        );
+      }
+      await run(
+        `INSERT INTO dc_line_trs (dc_line_id, tr_id, qty) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)`,
+        [line.insertId, t.trId, t.qty], conn);
+
+      // and it answers the PRN behind the request, so the receiving
+      // site's requirement closes out exactly as if the store had sent it
+      const indentId = trIndent.get(t.trId);
+      const roomOnPrn = owes(indentId, l.itemId);
+      if (roomOnPrn > 0.0005) {
+        await run(
+          `INSERT INTO dc_line_indents (dc_line_id, indent_id, qty) VALUES (?, ?, ?)
+           ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)`,
+          [line.insertId, indentId, round3(Math.min(t.qty, roomOnPrn))], conn);
+      }
+    }
+
     if (l.prns.length) {
       // the store said which PRN each part answers, so record that
       for (const p of l.prns) {
@@ -225,7 +282,7 @@ async function writeLines(conn, dcId, fromSiteId, toSiteId, lines) {
            ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)`,
           [line.insertId, p.indentId, p.qty], conn);
       }
-    } else {
+    } else if (!l.trs.length) {
       // nobody said: soonest needed first. The site may be owed less
       // than is being sent — extra stock is allowed to travel, it
       // simply answers no particular PRN.

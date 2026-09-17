@@ -8,6 +8,7 @@ import NewSite from './pages/NewSite';
 import SiteDetail from './pages/SiteDetail';
 import Stores from './pages/Stores';
 import Items from './pages/Items';
+import Clients from './pages/Clients';
 import Procurement from './pages/Procurement';
 import Suppliers from './pages/Suppliers';
 import { PurchaseOrders, PurchaseOrderDetail } from './pages/PurchaseOrders';
@@ -23,6 +24,7 @@ import { Billing, BillingSheet, Bills } from './pages/Billing';
 import { Challans, ChallanDetail } from './pages/Challans';
 import BoqList from './pages/BoqList';
 import Indents from './pages/Indents';
+import { SiteTransfers, SentAndReorder, SourceFromSitePage, StoreTransfers } from './pages/Transfers';
 import IndentCart from './pages/IndentCart';
 import IndentDetail from './pages/IndentDetail';
 
@@ -49,6 +51,7 @@ export const SECTIONS = [
     icon: '\u25A4',
     screens: [
       { to: '/sites', label: 'Sites' },
+      { to: '/clients', label: 'Clients' },
       { to: '/stores', label: 'Stores' },
       { to: '/boq', label: 'BOQ', badge: 'amendmentDue' },
       { to: '/items', label: 'Item master' },
@@ -62,6 +65,8 @@ export const SECTIONS = [
       { to: '/indents', label: 'Indents', badge: 'indentsWaiting' },
       { to: '/site/inbox', label: 'Acknowledgements' },
       { to: '/site/stock', label: 'Site store' },
+      { to: '/site/transfers', label: 'Transfers out' },
+      { to: '/site/sent', label: 'Sent & reorder' },
       { to: '/site/issue', label: 'Issue material' },
       { to: '/site/returns', label: 'Returns' },
       { to: '/site/transactions', label: 'Transactions' },
@@ -77,10 +82,12 @@ export const SECTIONS = [
     screens: [
       { to: '/store', label: 'Store desk', end: true },
       { to: '/store/prns', label: 'PRNs to fulfil' },
+      { to: '/store/transfers', label: 'Transfer requests' },
       { to: '/grns', label: 'GRN' },
       { to: '/challans', label: 'Challans' },
       { to: '/stock', label: 'Stock' },
       { to: '/movements', label: 'Movement' },
+      { to: '/items', label: 'Item master' },
     ],
   },
   {
@@ -123,13 +130,25 @@ export const SOON = [
   { id: 'accounts', label: 'Accounts', icon: '\u25CE' },
 ];
 
-const sectionFor = (pathname) =>
-  SECTIONS.find((s) => s.screens.some((x) => pathname.startsWith(x.to))) || SECTIONS[0];
+/**
+ * Which department's tab bar to show.
+ *
+ * Normally the path decides. The item master is the exception: it
+ * belongs to Planning, which reads it, and to Store, which is the only
+ * department allowed to add to it — one screen under two headings. So
+ * a link can say which department it was clicked from, and that wins
+ * over the path when it is a department the screen really lives in.
+ */
+const sectionFor = (pathname, from) =>
+  (from && SECTIONS.find((s) => s.id === from
+    && s.screens.some((x) => pathname.startsWith(x.to))))
+  || SECTIONS.find((s) => s.screens.some((x) => pathname.startsWith(x.to)))
+  || SECTIONS[0];
 
 function Shell({ children }) {
   const { branches, branchId, setBranch, stores, storeId, setStore, users, me, desk } = useApp();
-  const { pathname } = useLocation();
-  const section = sectionFor(pathname);
+  const { pathname, state } = useLocation();
+  const section = sectionFor(pathname, state?.dept);
   const [flyout, setFlyout] = useState(null);
   const counts = {
     amendmentDue: desk?.amendmentDue?.length || 0,
@@ -148,7 +167,8 @@ function Shell({ children }) {
           const total = s.screens.reduce((a, x) => a + (x.badge ? counts[x.badge] || 0 : 0), 0);
           return (
             <div key={s.id} onMouseEnter={() => setFlyout(s.id)}>
-              <NavLink to={s.screens[0].to} className={`dept ${on ? 'on' : ''}`}
+              <NavLink to={s.screens[0].to} state={{ dept: s.id }}
+                className={`dept ${on ? 'on' : ''}`}
                 aria-current={on ? 'page' : undefined}>
                 <i aria-hidden="true">{s.icon}</i>
                 <span>{s.label}</span>
@@ -171,7 +191,8 @@ function Shell({ children }) {
             onMouseLeave={() => setFlyout(null)}>
             <h4>{SECTIONS.find((x) => x.id === flyout).label}</h4>
             {SECTIONS.find((x) => x.id === flyout).screens.map((x) => (
-              <NavLink key={x.to} to={x.to} onClick={() => setFlyout(null)}
+              <NavLink key={x.to} to={x.to} state={{ dept: flyout }}
+                onClick={() => setFlyout(null)}
                 className={({ isActive }) => (isActive ? 'on' : '')}>
                 {x.label}
                 {x.badge && counts[x.badge] > 0 && <span className="count">{counts[x.badge]}</span>}
@@ -215,7 +236,7 @@ function Shell({ children }) {
         <nav className="tabs" aria-label={`${section.label} options`}>
           <span className="dept">{section.label}</span>
           {section.screens.map((x) => (
-            <NavLink key={x.to} to={x.to} end={x.end}
+            <NavLink key={x.to} to={x.to} end={x.end} state={{ dept: section.id }}
               className={({ isActive }) => (isActive ? 'on' : '')}>
               {x.label}
               {x.badge && counts[x.badge] > 0 && <span className="count">{counts[x.badge]}</span>}
@@ -304,8 +325,11 @@ export default function App() {
               <Route path="/stores" element={<Stores />} />
               <Route path="/boq" element={<BoqList />} />
               <Route path="/items" element={<Items />} />
+              <Route path="/clients" element={<Clients />} />
               <Route path="/store" element={<StoreDesk />} />
               <Route path="/store/prns" element={<Prns />} />
+              <Route path="/store/source" element={<SourceFromSitePage />} />
+              <Route path="/store/transfers" element={<StoreTransfers />} />
               <Route path="/store/issue" element={<IssueSheet />} />
               <Route path="/grns" element={<Grns />} />
               <Route path="/grns/register" element={<GrnRegister />} />
@@ -317,6 +341,8 @@ export default function App() {
               <Route path="/challans/:id" element={<ChallanDetail />} />
               <Route path="/site/inbox" element={<SiteInbox />} />
               <Route path="/site/stock" element={<SiteStock />} />
+              <Route path="/site/transfers" element={<SiteTransfers />} />
+              <Route path="/site/sent" element={<SentAndReorder />} />
               <Route path="/site/issue" element={<IssueStock />} />
               <Route path="/site/returns" element={<ReturnStock />} />
               <Route path="/site/transactions" element={<Transactions />} />

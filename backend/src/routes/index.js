@@ -22,6 +22,7 @@ router.use('/purchase-orders', require('../modules/purchaseorders.routes'));
 router.use('/comparisons', require('../modules/comparisons.routes'));
 router.use('/store',       require('../modules/store.routes'));
 router.use('/challans',    require('../modules/challans.routes'));
+router.use('/transfers',   require('../modules/transfers.routes'));
 router.use('/grns',        require('../modules/grn.routes'));
 router.use('/site-store',  require('../modules/sitestore.routes'));
 router.use('/consumption', require('../modules/consumption.routes'));

@@ -76,7 +76,7 @@ export function StoreDesk() {
                       <tr key={p.po_id}>
                         <td><Link to={`/purchase-orders/${p.po_id}`}>
                           <b className="mono">{p.doc_no}</b></Link>
-                          <small>{money(p.po_value)}</small></td>
+                          </td>
                         <td>{p.supplier_name}</td>
                         <td>{p.expected_date ? dmy(p.expected_date) : '—'}
                           {Number(p.overdue) > 0 && (
@@ -371,8 +371,13 @@ export function Prns() {
                           style={{ color: Number(r.can_send_qty) > 0 ? 'var(--ok)' : 'var(--faint)' }}>
                           {Number(r.can_send_qty) ? qty(r.can_send_qty) : 'nothing held'}
                         </td>
-                        <td className="rt">
+                        <td className="rt" style={{ whiteSpace: 'nowrap' }}>
                           <Link className="btn sm" to={`/store/issue?prns=${r.indent_id}${carry}`}>Issue</Link>
+                          {/* the store has not got it, but another site may have */}
+                          {Number(r.to_deliver_qty) > 0 && (
+                            <Link className="btn sm" style={{ marginLeft: 6 }}
+                              to={`/store/source?prn=${r.indent_id}${carry}`}>From a site</Link>
+                          )}
                         </td>
                       </tr>
                     );
@@ -665,7 +670,6 @@ export function IssueSheet() {
           <div className="pad" style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <Stat n={lines.length} label="rows" />
             <Stat n={qty(total)} label="units going" />
-            <Stat n={money(value)} label="leaving the shelf" tone="brand" />
             <div style={{ flex: 1 }} />
             <button className="btn" disabled={busy || over.length > 0}
               onClick={() => save(false)}>Save draft</button>
@@ -752,7 +756,6 @@ export function Stock() {
                     <th>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
                     <th className="rt">On the shelf</th><th className="rt">Out in transit</th>
                     <th className="rt">Sites want</th>
-                    <th className="rt">Latest rate</th><th className="rt">Value</th>
                     <th>Last moved</th>
                   </tr>
                 </thead>
@@ -775,14 +778,12 @@ export function Stock() {
                           {short && <small style={{ color: 'var(--bad)' }}>
                             short {qty(Number(r.demand_qty) - Number(r.qty))}</small>}
                         </td>
-                        <td className="rt mono">{money(r.latest_rate)}</td>
-                        <td className="rt mono">{money(r.value)}</td>
                         <td>{r.last_moved ? dmy(r.last_moved) : '—'}</td>
                       </tr>
                     );
                   })}
                   {!rows.length && (
-                    <tr><td colSpan={9}>
+                    <tr><td colSpan={7}>
                       <Empty title={f.q ? `Nothing on the shelf matches "${f.q}"` : 'The shelf is empty'}>
                         Stock arrives by acknowledging a purchase order.
                       </Empty>
@@ -816,14 +817,12 @@ function ItemCard({ itemId, onClose }) {
       footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="stats">
         <Stat n={qty(data.balance?.qty || 0)} label={`${data.item.uom} on the shelf`} />
-        <Stat n={money(data.balance?.latest_rate || 0)} label="latest rate" />
-        <Stat n={money(data.balance?.value || 0)} label="value" tone="brand" />
       </div>
       <div className="tw" style={{ maxHeight: 420, overflowY: 'auto' }}>
         <table>
           <thead>
             <tr><th>Date</th><th>Document</th><th>Why</th>
-              <th className="rt">In</th><th className="rt">Out</th><th className="rt">Rate</th></tr>
+              <th className="rt">In</th><th className="rt">Out</th></tr>
           </thead>
           <tbody>
             {data.moves.map((m) => (
@@ -836,11 +835,10 @@ function ItemCard({ itemId, onClose }) {
                   {Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
                 <td className="rt mono" style={{ color: 'var(--bad)' }}>
                   {Number(m.qty) < 0 ? qty(Math.abs(m.qty)) : ''}</td>
-                <td className="rt mono">{money(m.rate)}</td>
               </tr>
             ))}
             {!data.moves.length && (
-              <tr><td colSpan={6}><Empty title="Never moved" /></td></tr>
+              <tr><td colSpan={5}><Empty title="Never moved" /></td></tr>
             )}
           </tbody>
         </table>
@@ -943,8 +941,7 @@ export function DocPeek({ doc, onClose }) {
         {isDc
           ? <Stat n={qty(data.totals.inTransit)} label="still unaccounted for"
               tone={Number(data.totals.inTransit) ? 'bad' : 'ok'} />
-          : <Stat n={money(data.totals.gst)} label="GST" />}
-        <Stat n={money(data.totals.value)} label="value" tone="brand" />
+          : null}
       </div>
 
       <div className="tw" style={{ maxHeight: 400, overflowY: 'auto' }}>
@@ -956,7 +953,6 @@ export function DocPeek({ doc, onClose }) {
               {isDc
                 ? <><th className="rt">Signed for</th><th className="rt">In transit</th></>
                 : <th className="rt">Ordered</th>}
-              <th className="rt">Rate</th><th className="rt">Value</th>
             </tr>
           </thead>
           <tbody>
@@ -977,8 +973,6 @@ export function DocPeek({ doc, onClose }) {
                 ) : (
                   <td className="rt mono">{qty(l.ordered_qty)}</td>
                 )}
-                <td className="rt mono">{money(l.rate)}</td>
-                <td className="rt mono">{money(l.line_value)}</td>
               </tr>
             ))}
           </tbody>
@@ -1073,7 +1067,6 @@ export function Movements() {
             <Stat n={data.totals.moves} label="lines" />
             <Stat n={qty(data.totals.inQty)} label="units in" tone="ok" />
             <Stat n={qty(data.totals.outQty)} label="units out" tone="bad" />
-            <Stat n={money(data.totals.inValue)} label="value in" tone="brand" />
           </div>
         )}
 
@@ -1093,7 +1086,7 @@ export function Movements() {
               <table>
                 <thead>
                   <tr><th>Document</th><th>Date</th><th>Why</th><th className="rt">Items</th>
-                    <th className="rt">Units</th><th className="rt">Value</th><th>By</th></tr>
+                    <th className="rt">Units</th><th>By</th></tr>
                 </thead>
                 <tbody>
                   {docs.map((x) => (
@@ -1110,12 +1103,11 @@ export function Movements() {
                       </td>
                       <td className="rt mono">{x.lines}</td>
                       <td className="rt mono">{qty(x.qty)}</td>
-                      <td className="rt mono">{money(x.value)}</td>
                       <td>{x.byName || '—'}</td>
                     </tr>
                   ))}
                   {!docs.length && (
-                    <tr><td colSpan={7}>
+                    <tr><td colSpan={6}>
                       <Empty title="Nothing moved in that window">
                         Widen the dates, or clear the filters.
                       </Empty>
@@ -1131,8 +1123,7 @@ export function Movements() {
               <table>
                 <thead>
                   <tr><th>Date</th><th>Document</th><th>Item</th><th>Why</th>
-                    <th className="rt">In</th><th className="rt">Out</th>
-                    <th className="rt">Rate</th><th className="rt">Value</th><th>By</th></tr>
+                    <th className="rt">In</th><th className="rt">Out</th><th>By</th></tr>
                 </thead>
                 <tbody>
                   {rows.map((m) => (
@@ -1146,13 +1137,11 @@ export function Movements() {
                         {Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
                       <td className="rt mono" style={{ color: 'var(--bad)' }}>
                         {Number(m.qty) < 0 ? qty(Math.abs(m.qty)) : ''}</td>
-                      <td className="rt mono">{money(m.rate)}</td>
-                      <td className="rt mono">{money(m.value)}</td>
                       <td>{m.by_name || '—'}</td>
                     </tr>
                   ))}
                   {!rows.length && (
-                    <tr><td colSpan={9}><Empty title="Nothing moved in that window" /></td></tr>
+                    <tr><td colSpan={7}><Empty title="Nothing moved in that window" /></td></tr>
                   )}
                 </tbody>
               </table>

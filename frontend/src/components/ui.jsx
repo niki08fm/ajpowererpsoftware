@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 
 /* --------------------------------------------------------- toasts */
@@ -210,12 +211,17 @@ export function ItemPicker({ value, onPick, placeholder = 'Search the item maste
    back with the existing client's id, and rather than make the user
    read an error and go looking, that client is simply selected. */
 export function ClientPicker({
-  value, onChange, branchId, branches, width = 260, autoFocus,
+  value, onChange, branchId, width = 260, autoFocus,
 }) {
   const [adding, setAdding] = useState(false);
   const { data, reload } = useApi(branchId ? `/masters/clients?branchId=${branchId}` : null,
     [branchId]);
+  // the whole list too, only to explain an empty dropdown. A client
+  // filed under the other branch is the commonest reason one cannot be
+  // found, and saying so beats leaving somebody hunting.
+  const { data: all } = useApi('/masters/clients');
   const clients = data || [];
+  const elsewhere = (all || []).length - clients.length;
 
   return (
     <>
@@ -237,8 +243,15 @@ export function ClientPicker({
         <button type="button" className="btn" title="Add a client"
           onClick={() => setAdding(true)}>+</button>
       </div>
+      {elsewhere > 0 && (
+        <div className="hint" style={{ marginTop: 5 }}>
+          {elsewhere} more client{elsewhere === 1 ? '' : 's'} on the other branch — a site can only
+          be given a client of its own branch.{' '}
+          <Link to="/clients" style={{ color: 'var(--brand-ink)' }}>See all clients</Link>
+        </div>
+      )}
       {adding && (
-        <NewClient branchId={branchId} branches={branches}
+        <NewClient branchId={branchId}
           onClose={() => setAdding(false)}
           onSaved={(id) => { reload(); onChange(String(id)); setAdding(false); }} />
       )}
@@ -246,11 +259,20 @@ export function ClientPicker({
   );
 }
 
-function NewClient({ branchId, branches, onClose, onSaved }) {
+/**
+ * Adding a client without leaving the site form.
+ *
+ * There is no branch on this dialog on purpose. It is opened halfway
+ * through creating a site in a particular branch, and a client saved
+ * against any other branch would vanish from the dropdown the instant
+ * it was created — the list is filtered to this branch, because a site
+ * may only be given a client of its own. The branch can still be
+ * changed later, on the Clients screen, while the client has no sites.
+ */
+function NewClient({ branchId, onClose, onSaved }) {
   const toast = useToast();
   const [f, setF] = useState({
-    name: '', gstin: '', branchId: String(branchId || ''), address: '',
-    contactName: '', contactPhone: '',
+    name: '', gstin: '', address: '', contactName: '', contactPhone: '',
   });
   const [saving, setSaving] = useState(false);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -258,14 +280,14 @@ function NewClient({ branchId, branches, onClose, onSaved }) {
   // 15 characters, and nothing else is worth checking here — the
   // client's own paperwork is the authority on their GSTIN
   const gstinBad = f.gstin.trim().length > 0 && f.gstin.trim().length !== 15;
-  const ready = f.name.trim().length >= 2 && f.branchId && !gstinBad && !saving;
+  const ready = f.name.trim().length >= 2 && branchId && !gstinBad && !saving;
 
   const save = async () => {
     setSaving(true);
     try {
       const r = await api.post('/masters/clients', {
         name: f.name.trim(),
-        branchId: Number(f.branchId),
+        branchId: Number(branchId),
         gstin: f.gstin.trim() || undefined,
         address: f.address.trim() || undefined,
         contactName: f.contactName.trim() || undefined,
@@ -289,7 +311,7 @@ function NewClient({ branchId, branches, onClose, onSaved }) {
 
   return (
     <Modal title="Add a client"
-      sub="Only the name and the branch are needed now — the rest can follow"
+      sub="Only the name is needed now — the rest can follow"
       onClose={onClose}
       footer={
         <button className="btn pri" disabled={!ready} onClick={save}>
@@ -306,12 +328,6 @@ function NewClient({ branchId, branches, onClose, onSaved }) {
           <input className="inp mono" style={{ width: 220 }} value={f.gstin}
             placeholder="36AABCP1234M1Z5" maxLength={15}
             onChange={(e) => setF((x) => ({ ...x, gstin: e.target.value.toUpperCase() }))} />
-        </Field>
-        <Field label="Branch">
-          <select className="inp" style={{ width: 200 }} value={f.branchId}
-            onChange={set('branchId')}>
-            {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
         </Field>
       </div>
       <Field label="Address" hint="Optional">

@@ -12,7 +12,7 @@
 const TABLES = [
   // the store, newest first
   'dc_acknowledgement_lines', 'dc_acknowledgements',
-  'dc_line_indents', 'delivery_challan_lines', 'delivery_challans',
+  'dc_line_indents', 'dc_line_trs', 'delivery_challan_lines', 'delivery_challans',
   // procurement
   'stock_movements',
   'goods_receipt_lines', 'goods_receipts',
@@ -23,6 +23,8 @@ const TABLES = [
   'supplier_makes', 'suppliers',
   // billing
   'bill_lines', 'bills',
+  // transfer between sites, sourced by the store
+  'tr_events', 'transfer_request_lines', 'transfer_requests',
   // site
   'site_expense_events', 'site_expenses',
   'stock_return_lines', 'stock_returns',

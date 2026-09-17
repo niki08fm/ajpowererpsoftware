@@ -44,6 +44,17 @@ rather than making the user read an error and go looking for it.
 code. A word-order match is saved with a `warning` and the `similar`
 items listed.
 
+`std_rate` is still stored and still returned, but **no screen outside
+Procure displays it**. The item master, goods receipts and delivery
+challans show quantities only; the store keeps its own stocktaking
+total and nothing per item. Rates appear on the buying sheet
+(`POST /procurement/demand` returns `storeRate`, `lastPaidRate` and
+`suggestedRate` per line), the rate comparison and the purchase order.
+
+This is a choice about which screens render what — not access control.
+There is no authentication yet, so the API returns these fields to any
+caller and anyone may open Procure.
+
 ## Sites and stores
 | | |
 |---|---|
@@ -841,3 +852,90 @@ before RA 3 — so the running total can never be reconstructed wrongly.
 `GET /progress/site/:id` returns, per BOQ line: `boq_qty`,
 `effective_est`, `approved_qty`, `committed_qty`, `item_indented_qty`,
 `balance` and `over_qty`. Every one of them derived.
+
+## Transfers — sourcing a PRN from another site
+
+| | |
+|---|---|
+| `GET /transfers/prn/:indentId/outstanding` | what a PRN still wants, and which sites hold it |
+| `POST /transfers` | the store asks a site to send, against that PRN |
+| `POST /transfers/:id/decide` | `ACCEPTED` / `REJECTED` — the sending site answers |
+| `POST /transfers/:id/cancel` | only while nothing has gone against it |
+| `GET /transfers?storeId=&fromSiteId=&toSiteId=&state=&show=` | |
+| `GET /transfers/:id` | lines, what the sending site holds, events, challans |
+| `GET /transfers/site/:siteId/history` | every transfer challan sent, document by document |
+| `GET /transfers/site/:siteId/lent-out?show=` | lent, already reordered, still to reorder |
+| `POST /transfers/site/:siteId/reorder` | raise the replacement PRN |
+
+**Only the central store raises one.** Sites do not trade with each
+other directly — the store decides what moves, because the store is
+what knows where everything is. A request names a site to send, the PRN
+being answered, and therefore the site to receive.
+
+The sending site accepts, then writes an **ordinary delivery challan**
+(`POST /challans` with `trId` on the lines). That challan is linked to
+the PRN behind the request as well, so the receiving site's requirement
+closes out exactly as if the store had sent it. To the receiver nothing
+new is happening: an ordinary challan lands in the ordinary inbox.
+
+Guards: the request quantity cannot exceed what the sending site holds
+(checked when the store raises it, and again on dispatch); the request
+must be `ACCEPTED` before anything ships; it cannot be over-answered;
+and a refusal must carry a note.
+
+`state`: `AWAITING`, `TO_SEND`, `PART_SENT`, `IN_TRANSIT`, `COMPLETE`,
+`REJECTED`, `CANCELLED`.
+
+### Reordering issued stock, and the rule behind it
+
+`indents` gains `kind`: `DEMAND` (everything that came before) or
+`REPLACEMENT`. A reorder is a **real PRN** — it appears on PRNs to
+fulfil, procurement buys against it, the store challans it out. What it
+is **not** is a fresh claim on the site's work order.
+
+`v_boq_item_indented` and `v_boq_line_movement` — the only two views
+that answer *"how much has been indented"* — now ignore `REPLACEMENT`.
+Everything downstream inherits that without knowing: `v_boq_line_status`,
+the BOQ balance, the amendment trigger, `v_wo_line_indented` and through
+it the billing ceiling. Nothing that answers *"what still has to be
+delivered"* is touched — `v_indent_rollup`, `v_indent_item_flow` and
+`v_indent_pipeline` see replacements in full, because somebody really
+does have to send them.
+
+Without this, a site that lent out cable and reordered it would have
+indented the same cable twice: its BOQ would read overspent, it could
+trigger a false amendment, and **its billing ceiling would double**.
+
+A reorder is capped at what was lent, net of what has already been
+asked back (`to_reorder_qty`). Past that point a site is not replacing
+anything, it is indenting — and indenting has its own form.
+
+### The store's ledger
+
+Transfer challans never appear in the central store's stock movements,
+because the material never went near it: a challan writes `DC_OUT`
+against `from_site_id` and `DC_IN` against `to_site_id`, and neither is
+the store. `v_site_lent_out` counts only material that left on a
+transfer challan — material issued to a person was spent on that site's
+own work and is not reorderable this way.
+
+
+### Clients
+
+`GET /masters/clients` returns every client with its branch name and a
+count of the sites using it. `branchId` filters it — which is what the
+client picker on the site form does, because **a site may only be given
+a client of its own branch** (`POST /sites` refuses the pairing
+otherwise, and a client name is unique across the whole system, so a
+client belongs to exactly one branch).
+
+`PATCH /masters/clients/:id` edits one. The branch may be changed only
+while the client has **no sites**: a site carries its own `branch_id`
+and the two must agree, so moving a client out from under a live site
+would leave a pairing the system refuses to create. Renaming is guarded
+against duplicates the same way `POST` is.
+
+This matters because a client filed under the wrong branch is otherwise
+stranded — invisible in the site form's picker and reachable from
+nowhere else. The Clients screen under Planning lists every client
+across every branch, which is where such a one is found and put right.
