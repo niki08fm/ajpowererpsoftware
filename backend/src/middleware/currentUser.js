@@ -15,12 +15,14 @@ const { one, many } = require('../config/db');
 async function currentUser(req, _res, next) {
   try {
     const asked = Number(req.headers['x-user-id'] || 0);
-    const user = asked
+    // Only look up a user when a positive integer ID is sent.
+    // No fallback to "first user in the table" — that silently stamps
+    // the wrong name on documents when the header is missing or stale.
+    // raised_by / created_by columns are nullable; NULL is the honest
+    // answer when we don't know who is acting.
+    req.user = asked
       ? await one(`SELECT id, name, email, department FROM users WHERE id = ? AND is_active = 1`, [asked])
       : null;
-    req.user = user || (await one(
-      `SELECT id, name, email, department FROM users WHERE is_active = 1 ORDER BY id LIMIT 1`
-    ));
     next();
   } catch (err) { next(err); }
 }

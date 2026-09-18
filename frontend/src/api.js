@@ -18,8 +18,12 @@ export class ApiError extends Error {
 
 let userId = Number(localStorage.getItem('ajp.userId')) || null;
 export const setUserId = (id) => {
-  userId = id;
-  localStorage.setItem('ajp.userId', String(id));
+  userId = id ? Number(id) : null;
+  if (userId) {
+    localStorage.setItem('ajp.userId', String(userId));
+  } else {
+    localStorage.removeItem('ajp.userId');
+  }
 };
 export const getUserId = () => userId;
 

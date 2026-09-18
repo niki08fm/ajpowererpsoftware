@@ -272,7 +272,18 @@ export function BoqSheet({ boqId, onClose }) {
     } catch (e) { toast(e.message, 'bad'); }
   };
 
-  const allDone = data.remaining === 0 && pending.length === 0;
+  // allDone is computed from LOCAL edit state so the Submit button
+  // activates the moment the user finishes the last field — not after
+  // the next server round-trip. A line is "done" when it has at least
+  // one item picked and itemQty > 0, and its estQty > 0.
+  const locallyDone = onSheet.length > 0 && onSheet.every((lid) => {
+    const ed = edit[lid];
+    if (!ed) return false;
+    const hasItem = ed.items.some((r) => r.item && Number(r.itemQty) > 0);
+    const hasEst = Number(ed.estQty) > 0;
+    return hasItem && hasEst;
+  });
+  const allDone = pending.length === 0 && locallyDone;
 
   return (
     <>

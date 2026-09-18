@@ -50,7 +50,7 @@ function PrivateRoute({ children }) {
 /* =================================================================
    Shared top bar used by both dept shells
    ================================================================= */
-function DeptTopBar({ branchId, branches, setBranch, me, showStore, stores, storeId, setStore }) {
+function DeptTopBar({ branchId, branches, setBranch, me, showStore, stores, storeId, setStore, showSite, sites, siteId, setSite }) {
   const nav = useNavigate();
   const handleChangeUser = () => {
     setUserId(null);
@@ -68,6 +68,16 @@ function DeptTopBar({ branchId, branches, setBranch, me, showStore, stores, stor
       <select id="dept-branch" value={branchId || ''} onChange={(e) => setBranch(Number(e.target.value))}>
         {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
       </select>
+      {showSite && sites?.length > 0 && (
+        <>
+          <label className="who" htmlFor="dept-site">Site</label>
+          <select id="dept-site" value={siteId || ''} onChange={(e) => setSite(Number(e.target.value))}>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </>
+      )}
       {showStore && stores?.length > 0 && (
         <>
           <label className="who" htmlFor="dept-store">Store</label>
@@ -146,7 +156,7 @@ const SITE_SCREENS = [
 ];
 
 function SiteShell() {
-  const { branches, branchId, setBranch, me, desk } = useApp();
+  const { branches, branchId, setBranch, me, desk, sites, siteId, setSite } = useApp();
   const counts = {
     indentsWaiting: desk?.indentsWaiting?.length || 0,
     expensesWaiting: desk?.expensesWaiting || 0,
@@ -155,7 +165,8 @@ function SiteShell() {
   return (
     <div className="shell dept-shell">
       <div className="main">
-        <DeptTopBar branchId={branchId} branches={branches} setBranch={setBranch} me={me} />
+        <DeptTopBar branchId={branchId} branches={branches} setBranch={setBranch} me={me}
+          showSite sites={sites} siteId={siteId} setSite={setSite} />
         <nav className="tabs" aria-label="Site">
           <span className="dept">Site</span>
           {SITE_SCREENS.map((x) => (
@@ -299,8 +310,11 @@ export default function App() {
   const [boot, setBoot] = useState({ loading: true });
   const [branchId, setBranchId] = useState(Number(localStorage.getItem('ajp.branchId')) || null);
   const [storeId, setStoreId] = useState(Number(localStorage.getItem('ajp.storeId')) || null);
+  const [siteId, setSiteId] = useState(Number(localStorage.getItem('ajp.siteId')) || null);
   const [stores, setStores] = useState([]);
   const [storesLoading, setStoresLoading] = useState(true);
+  const [sites, setSites] = useState([]);
+  const [sitesLoading, setSitesLoading] = useState(true);
   const [desk, setDesk] = useState(null);
 
   useEffect(() => {
@@ -325,6 +339,19 @@ export default function App() {
       .finally(() => setStoresLoading(false));
   }, [branchId]);
 
+  // Load project sites for the branch — used by the Site shell toggle
+  useEffect(() => {
+    if (!branchId) return;
+    setSitesLoading(true);
+    api.get(`/sites?branchId=${branchId}`)
+      .then((rows) => {
+        setSites(rows);
+        setSiteId((cur) => (rows.some((r) => r.id === cur) ? cur : rows[0]?.id || null));
+      })
+      .catch(() => { setSites([]); setSiteId(null); })
+      .finally(() => setSitesLoading(false));
+  }, [branchId]);
+
   const refreshDesk = useCallback(() => {
     if (!branchId) return;
     api.get(`/progress/desk?branchId=${branchId}`).then(setDesk).catch(() => setDesk(null));
@@ -344,10 +371,14 @@ export default function App() {
 
   const setBranch = (id) => { setBranchId(id); localStorage.setItem('ajp.branchId', String(id)); };
   const setStore = (id) => { setStoreId(id); localStorage.setItem('ajp.storeId', String(id)); };
+  const setSite = (id) => { setSiteId(id); localStorage.setItem('ajp.siteId', String(id)); };
 
   return (
     <AppCtx.Provider value={{
-      ...boot, branchId, setBranch, storeId, setStore, stores, storesLoading, desk, refreshDesk,
+      ...boot, branchId, setBranch,
+      storeId, setStore, stores, storesLoading,
+      siteId, setSite, sites, sitesLoading,
+      desk, refreshDesk,
     }}>
       <ToastHost>
         <BrowserRouter>

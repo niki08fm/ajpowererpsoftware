@@ -90,13 +90,13 @@ ajpowererpsoftware/
 │   │   ├── config/db.js         ← MySQL pool: many, one, run, tx
 │   │   ├── config/env.js        ← Env vars with defaults
 │   │   ├── db/
-│   │   │   ├── migrations/      ← 001–023 SQL migration files
+│   │   │   ├── migrations/      ← 001–024 SQL migration files
 │   │   │   ├── seeds/           ← 001_reference, 002_items, 003_demo_data, 004_expanded_data
 │   │   │   └── setup.js         ← Migration + seed runner (idempotent)
 │   │   ├── lib/                 ← audit, docNo, errors, normKey, rates, woImport
 │   │   ├── middleware/          ← currentUser, error handler, validate
-│   │   ├── modules/             ← 21 route files (one per domain)
-│   │   └── routes/index.js      ← Mounts all 21 route prefixes
+│   │   ├── modules/             ← 22 route files (one per domain)
+│   │   └── routes/index.js      ← Mounts all 22 route prefixes
 └── frontend/
     └── src/
         ├── App.jsx              ← Shell, SECTIONS (6 depts), AppCtx, all routes
@@ -105,5 +105,5 @@ ajpowererpsoftware/
         ├── components/
         │   ├── ui.jsx           ← Card, Field, Tag, Banner, Modal, useApi, toasts
         │   └── charts.jsx       ← SVG charts for Reports
-        └── pages/               ← 24 page files
+        └── pages/               ← 26 page files
 ```

@@ -186,6 +186,7 @@ export function PurchaseOrderDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const toast = useToast();
+  const { me } = useApp();
   const { data, error, loading, reload } = useApi(`/purchase-orders/${id}`, [id]);
   const [sign, setSign] = useState(null);       // 'APPROVED' | 'RETURNED' | 'CANCELLED'
   const [note, setNote] = useState('');
@@ -194,6 +195,10 @@ export function PurchaseOrderDetail() {
 
   if (loading) return <Loading />;
   if (error) return <div className="page-body"><ErrorNote error={error} onRetry={reload} /></div>;
+
+  // Only Store staff can acknowledge a delivery — they are the ones
+  // standing at the door. Procurement can see this page but cannot receive.
+  const canReceive = me?.department === 'Store';
 
   const decide = async () => {
     setBusy(true);
@@ -244,7 +249,7 @@ export function PurchaseOrderDetail() {
                 <button className="btn pri" onClick={() => setSign('APPROVED')}>Sign it</button>
               </>
             )}
-            {data.status === 'APPROVED' && Number(data.pending_qty) > 0 && (
+            {data.status === 'APPROVED' && Number(data.pending_qty) > 0 && canReceive && (
               <button className="btn pri" onClick={() => setReceiving(true)}>Receive</button>
             )}
             {['DRAFT', 'RETURNED', 'SUBMITTED', 'APPROVED'].includes(data.status)

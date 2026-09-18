@@ -482,6 +482,10 @@ function Pipeline({ stage, onOpen }) {
 export function IndentDetail() {
   const { id } = useParams();
   const { pathname } = useLocation();
+  // Site dept is the "home" view — full detail with edit/submit controls
+  // and all cards. Every other dept gets a minimal read-only view: just
+  // the two tracking cards plus approve/return for Planning.
+  const isSiteView = pathname.startsWith('/site/');
   const isPlanningView = pathname.startsWith('/planning/');
   const nav = useNavigate();
   const toast = useToast();
@@ -507,16 +511,18 @@ export function IndentDetail() {
     } catch (e) { toast(e.message, 'bad'); }
   };
 
-  const backPath = isPlanningView ? '/planning/indents' : '/site/indents';
+  const backPath = isSiteView ? '/site/indents'
+    : isPlanningView ? '/planning/indents'
+    : -1; // any other dept: go back in history
 
   return (
     <>
       <PageHead title={data.docNo} sub={`${data.site.name} · against ${data.boqDocNo} · raised by ${data.raisedBy}`}
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={() => nav(backPath)}>Back</button>
-            {!isPlanningView && data.canEdit && <Link className="btn" to={`/site/indents/${id}/edit`}>Edit</Link>}
-            {!isPlanningView && data.canEdit && <button className="btn pri" onClick={submit}>Submit</button>}
+            <button className="btn" onClick={() => typeof backPath === 'number' ? nav(backPath) : nav(backPath)}>Back</button>
+            {isSiteView && data.canEdit && <Link className="btn" to={`/site/indents/${id}/edit`}>Edit</Link>}
+            {isSiteView && data.canEdit && <button className="btn pri" onClick={submit}>Submit</button>}
             {data.status === 'SUBMITTED' && (
               <>
                 <button className="btn bad" onClick={() => act('RETURNED')}>Return</button>
@@ -526,7 +532,8 @@ export function IndentDetail() {
           </div>
         } />
       <div className="page-body">
-        {data.overLines > 0 && (
+        {/* Over-estimate warning — full view only */}
+        {isSiteView && data.overLines > 0 && (
           <Banner kind={data.severity === 'bad' ? 'bad' : 'warn'} icon={data.severity === 'bad' ? '▲' : '⚠'}>
             <b>{data.overLines} line(s) go past the BOQ estimate — {Number(data.worstOverPct).toFixed(1)}% at the
             worst line.</b><br />
@@ -634,7 +641,10 @@ export function IndentDetail() {
           </Card>
         )}
 
-        {data.rolledUp && (
+        {/* "What this orders", "Lines", and "History" are full-detail cards
+            only shown in the Site dept view. Planning and other depts see
+            only "Where the material is" and "Orders raised against it". */}
+        {isSiteView && data.rolledUp && (
           <Card title="What this orders"
             sub="One line per item. Which BOQ line it was asked for against stops mattering the
                  moment it is approved — this is what Procurement buys and the store picks.">
@@ -668,58 +678,62 @@ export function IndentDetail() {
           </Card>
         )}
 
-        <Card title={data.rolledUp ? 'How it was raised' : 'Lines'}
-          sub={data.rolledUp
-            ? 'Kept on the record so a variation can still be traced to the line it came off'
-            : undefined}>
-          <div className="tw">
-            <table>
-              <thead>
-                <tr>
-                  <th>Sl No</th><th>Item</th><th>Unit</th>
-                  <th className="rt">Est qty</th><th className="rt">Indent qty</th><th>Against estimate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.lines.map((l) => (
-                  <tr key={l.id}>
-                    <td className="sn">{l.sno}</td>
-                    <td><b>{l.item_name}</b><small className="mono">{l.item_code}{l.make_name ? ` · ${l.make_name}` : ''}</small></td>
-                    <td>{l.uom}</td>
-                    <td className="rt mono">{qty(l.effective_est)}</td>
-                    <td className="rt mono"><b>{qty(l.qty)}</b></td>
-                    <td>
-                      {Number(l.over_qty) > 0
-                        ? <Tag kind={data.severity === 'bad' ? 'bad' : 'warn'}>
-                          {data.severity === 'bad' ? '▲' : '⚠'} {qty(l.over_qty)} over
-                        </Tag>
-                        : <Tag kind="ok">✓ within estimate</Tag>}
-                    </td>
+        {isSiteView && (
+          <Card title={data.rolledUp ? 'How it was raised' : 'Lines'}
+            sub={data.rolledUp
+              ? 'Kept on the record so a variation can still be traced to the line it came off'
+              : undefined}>
+            <div className="tw">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Sl No</th><th>Item</th><th>Unit</th>
+                    <th className="rt">Est qty</th><th className="rt">Indent qty</th><th>Against estimate</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                </thead>
+                <tbody>
+                  {data.lines.map((l) => (
+                    <tr key={l.id}>
+                      <td className="sn">{l.sno}</td>
+                      <td><b>{l.item_name}</b><small className="mono">{l.item_code}{l.make_name ? ` · ${l.make_name}` : ''}</small></td>
+                      <td>{l.uom}</td>
+                      <td className="rt mono">{qty(l.effective_est)}</td>
+                      <td className="rt mono"><b>{qty(l.qty)}</b></td>
+                      <td>
+                        {Number(l.over_qty) > 0
+                          ? <Tag kind={data.severity === 'bad' ? 'bad' : 'warn'}>
+                            {data.severity === 'bad' ? '▲' : '⚠'} {qty(l.over_qty)} over
+                          </Tag>
+                          : <Tag kind="ok">✓ within estimate</Tag>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
 
-        <Card title="History">
-          <div className="tw">
-            <table>
-              <thead><tr><th>Action</th><th>By</th><th>When</th><th>Note</th></tr></thead>
-              <tbody>
-                {data.events.map((e, i) => (
-                  <tr key={i}>
-                    <td><Tag kind={e.action === 'APPROVED' ? 'ok' : e.action === 'RETURNED' ? 'bad' : ''}>{e.action}</Tag></td>
-                    <td>{e.user_name || '—'}</td>
-                    <td className="mono">{dmy(e.created_at)}</td>
-                    <td>{e.note || '—'}</td>
-                  </tr>
-                ))}
-                {!data.events.length && <tr><td colSpan={4}><Empty title="Not sent yet" /></td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        {isSiteView && (
+          <Card title="History">
+            <div className="tw">
+              <table>
+                <thead><tr><th>Action</th><th>By</th><th>When</th><th>Note</th></tr></thead>
+                <tbody>
+                  {data.events.map((e, i) => (
+                    <tr key={i}>
+                      <td><Tag kind={e.action === 'APPROVED' ? 'ok' : e.action === 'RETURNED' ? 'bad' : ''}>{e.action}</Tag></td>
+                      <td>{e.user_name || '—'}</td>
+                      <td className="mono">{dmy(e.created_at)}</td>
+                      <td>{e.note || '—'}</td>
+                    </tr>
+                  ))}
+                  {!data.events.length && <tr><td colSpan={4}><Empty title="Not sent yet" /></td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
       </div>
     </>
   );

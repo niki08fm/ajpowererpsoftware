@@ -44,6 +44,9 @@ const {
   stores,       // stores for current branch
   storeId,      // active store ID (localStorage)
   setStore,
+  sites,        // project sites for current branch (used by Site shell)
+  siteId,       // active site ID (localStorage)
+  setSite,
   users,        // all active users
   me,           // current acting user (from /whoami)
   desk,         // badge counts: { amendmentDue, indentsWaiting, expensesWaiting }
