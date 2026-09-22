@@ -276,7 +276,7 @@ function problems(rows, capKey, capWord) {
    ISSUE
    =================================================================== */
 export function IssueStock() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const toast = useToast();
   const [head, setHead] = useState({ usedOn: today(), issuedTo: '', purpose: '', note: '' });
   const [rows, setRows] = useState([]);
@@ -330,7 +330,6 @@ export function IssueStock() {
       <div className="page-body">
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            {picker}
             <Field label="Issued on">
               <input className="inp" type="date" style={{ width: 160 }} value={head.usedOn}
                 max={today()}
@@ -525,7 +524,7 @@ export function IssueCard({ id, onClose }) {
    RETURN
    =================================================================== */
 export function ReturnStock() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const toast = useToast();
   const [head, setHead] = useState({ returnedOn: today(), returnedBy: '', reason: '' });
   const [rows, setRows] = useState([]);
@@ -587,7 +586,6 @@ export function ReturnStock() {
       <div className="page-body">
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            {picker}
             <Field label="Returned on">
               <input className="inp" type="date" style={{ width: 160 }} value={head.returnedOn}
                 max={today()}

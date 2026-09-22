@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, addDays } from '../api';
+import { api, qty, money, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast,
@@ -41,9 +41,9 @@ export default function Procurement() {
     stage: f.stage, sort: f.sort,
   }).toString();
 
-  const { data, error, loading, reload } = useApi(branchId ? `/procurement/queue?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/procurement/queue?${qs}`,
     [branchId, qs]);
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const [picked, setPicked] = useState([]);
   const [buying, setBuying] = useState(false);
   const [comparing, setComparing] = useState(false);
@@ -70,7 +70,9 @@ export default function Procurement() {
     setComparing(true);
     try {
       const r = await api.post('/comparisons', {
-        branchId,
+        // on every branch there is no single one to send; the server
+        // takes it from the indents and refuses a mix of branches
+        ...(branchId ? { branchId } : {}),
         indentIds: picked,
         title: chosen.length === 1
           ? `${chosen[0].doc_no} · ${chosen[0].site_name}`

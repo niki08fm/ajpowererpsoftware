@@ -17,6 +17,7 @@ const { pool } = require('../src/config/db');
 const { setup } = require('../src/db/setup');
 const env = require('../src/config/env');
 const { resetTransactional } = require('./reset');
+const { signOff, signOnce, as, GM, MANAGEMENT } = require('./sign');
 
 let server; let base; let live = false;
 const api = (path, opts = {}) =>
@@ -75,13 +76,14 @@ describe('issue and return', () => {
     await api(`/boq/${S.boq}/wo-line/${sheet.woLines[0].wo_line_id}`, { method: 'PUT', body: {
       estQty: 100, items: [{ itemId: S.box, itemQty: 1 }, { itemId: S.plate, itemQty: 1 }] } });
     await api(`/boq/${S.boq}/submit`, { method: 'POST', body: { overAllow: false } });
+    await signOff(api, `/boq/${S.boq}/decide`);
 
     const lines = (await api(`/indents/boq/${S.boq}/lines`)).body;
     const box = lines.find((l) => l.item_id === S.box);
     const ind = await api('/indents', { method: 'POST', body: {
       siteId: S.site, indentDate: '2026-09-05',
       lines: [{ boqLineId: box.boq_line_id, qty: 100 }], send: true } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
 
     const sup = await api('/suppliers', { method: 'POST', body: { name: 'Polycab Distributors' } });
     const po = await api('/purchase-orders', { method: 'POST', body: {
@@ -89,7 +91,7 @@ describe('issue and return', () => {
       poDate: '2026-09-08', submit: true,
       lines: [{ itemId: S.box, qty: 100, rate: 112, gstRate: 18 }] } });
     S.po = po.body.id;
-    await api(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/purchase-orders/${S.po}/decide`);
 
     const pend = (await api(`/purchase-orders/${S.po}/pending`)).body;
     await api(`/purchase-orders/${S.po}/receipts`, { method: 'POST', body: {

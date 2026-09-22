@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, addDays } from '../api';
+import { api, qty, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, ItemPicker,
@@ -82,9 +82,9 @@ function DateRange({ from, to, onChange }) {
 
 /** Site or all sites — the one filter every screen here needs. */
 function SitePicker({ value, onChange, label = 'Site', allLabel = 'Every site' }) {
-  const { branchId } = useApp();
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
-  const { data: stores } = useApi(branchId ? `/store/stores?branchId=${branchId}` : null, [branchId]);
+  const { branchId, siteId } = useApp();
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
+  const { data: stores } = useApi(withBranch('/store/stores', branchId), [branchId]);
   return (
     <Field label={label}>
       <select className="inp" style={{ width: 230 }} value={value}
@@ -120,9 +120,9 @@ const KindTag = ({ kind }) => (
    1. TRANSACTIONS
    =================================================================== */
 export function Transactions() {
-  const { branchId } = useApp();
+  const { branchId, siteId } = useApp();
   const [f, set] = useFilters({
-    site: '', kind: '', direction: 'ALL', siteType: 'ALL',
+    site: String(siteId || ''), kind: '', direction: 'ALL', siteType: 'ALL',
     from: '', to: '', q: '', person: '', sort: 'recent',
   });
   const [peek, setPeek] = useState(null);
@@ -141,10 +141,10 @@ export function Transactions() {
   }).toString();
 
   const { data, error, loading, reload } = useApi(
-    branchId ? `/tracking/transactions?${qs}` : null, [qs]);
+    `/tracking/transactions?${qs}`, [qs]);
   const kinds = useApi(
-    branchId ? `/tracking/transactions/kinds?branchId=${branchId}`
-      + (f.site ? `&siteId=${f.site}` : '') : null, [branchId, f.site]);
+    withBranch('/tracking/transactions/kinds', branchId)
+      + (f.site ? `${branchId ? '&' : '?'}siteId=${f.site}` : ''), [branchId, f.site]);
 
   const rows = data?.rows || [];
   const grab = () => downloadCsv('transactions', [
@@ -216,7 +216,7 @@ export function Transactions() {
             </Field>
             <div style={{ paddingBottom: 8 }}>
               <button className="btn sm" onClick={() => set({
-                site: '', kind: '', direction: 'ALL', siteType: 'ALL',
+                site: String(siteId || ''), kind: '', direction: 'ALL', siteType: 'ALL',
                 from: '', to: '', q: '', person: '', sort: 'recent',
               })}>Clear filters</button>
             </div>
@@ -303,7 +303,9 @@ export function Transactions() {
    2. AUDIT — by item, or by person
    =================================================================== */
 export function Audit() {
-  const [f, set] = useFilters({ by: 'item', item: '', name: '', site: '', from: '', to: '' });
+  const { siteId } = useApp();
+  const [f, set] = useFilters({
+    by: 'item', item: '', name: '', site: String(siteId || ''), from: '', to: '' });
   const by = f.by === 'person' ? 'person' : 'item';
 
   return (
@@ -336,7 +338,7 @@ export function Audit() {
 
 /* ------------------------------------------------------- by item */
 function AuditByItem({ f, set }) {
-  const { branchId } = useApp();
+  const { branchId, siteId } = useApp();
   const [picked, setPicked] = useState(null);
 
   // an item id in the URL should survive a reload, so fetch its name
@@ -510,7 +512,7 @@ function AuditByItem({ f, set }) {
 
 /* ----------------------------------------------------- by person */
 function AuditByPerson({ f, set }) {
-  const { branchId } = useApp();
+  const { branchId, siteId } = useApp();
   const [term, setTerm] = useState(f.name);
   useEffect(() => { setTerm(f.name); }, [f.name]);
 
@@ -520,7 +522,7 @@ function AuditByPerson({ f, set }) {
     ...(f.to ? { to: f.to } : {}),
   }).toString();
 
-  const list = useApi(branchId ? `/tracking/audit/people?${scope}&sort=outstanding` : null, [scope]);
+  const list = useApi(`/tracking/audit/people?${scope}&sort=outstanding`, [scope]);
   const one = useApi(
     f.name ? `/tracking/audit/person?name=${encodeURIComponent(f.name)}&${scope}` : null,
     [f.name, scope]);
@@ -703,9 +705,9 @@ function AuditByPerson({ f, set }) {
    3. CUMULATIVE CONSUMPTION
    =================================================================== */
 export function Consumed() {
-  const { branchId } = useApp();
+  const { branchId, siteId } = useApp();
   const [f, set] = useFilters({
-    site: '', from: '', to: '', q: '', sort: 'qty', bucket: 'month',
+    site: String(siteId || ''), from: '', to: '', q: '', sort: 'qty', bucket: 'month',
   });
 
   const qs = new URLSearchParams({
@@ -718,7 +720,7 @@ export function Consumed() {
   }).toString();
 
   const { data, error, loading, reload } = useApi(
-    branchId ? `/tracking/consumed?${qs}` : null, [qs]);
+    `/tracking/consumed?${qs}`, [qs]);
   const rows = data?.rows || [];
   const oneDay = f.from && f.from === f.to;
 

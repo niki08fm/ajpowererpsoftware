@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { useApi, Card, Tag, Empty, Loading, ErrorNote, Meter } from '../components/ui';
-import { money, dmy } from '../api';
+import { money, dmy, withBranch } from '../api';
 
 /** What a site's BOQ is doing, in one chip. */
 function BoqCell({ site }) {
@@ -23,7 +23,7 @@ function BoqCell({ site }) {
 export default function Sites() {
   const { branchId } = useApp();
   const nav = useNavigate();
-  const { data, error, loading, reload } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data, error, loading, reload } = useApi(withBranch('/sites', branchId), [branchId]);
 
   return (
     <>

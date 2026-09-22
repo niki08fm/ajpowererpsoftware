@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { qty, dmy } from '../api';
 import { downloadCsv } from '../download';
@@ -22,35 +22,28 @@ import { DocLink, DocPeek } from './Store';
  * price and has no business quoting one; what it holds is a quantity.
  */
 
-/** Every site screen needs to know which site. */
+/**
+ * Which site this screen is answered for.
+ *
+ * Picked once, on the cards the Site department opens with, and switched
+ * from the top bar. The screens used to carry their own site dropdown and
+ * keep the choice in the URL, so it was re-picked — or silently defaulted
+ * to the first site — on every screen you moved to.
+ *
+ * `picker` is kept so older call sites still destructure cleanly; there
+ * is nothing left for it to draw.
+ */
 export function useSite() {
-  const { branchId } = useApp();
-  const [params, setParams] = useSearchParams();
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
-  const siteId = params.get('site') || '';
-
-  useEffect(() => {
-    if (!siteId && sites?.length) {
-      setParams((p) => { p.set('site', String(sites[0].id)); return p; }, { replace: true });
-    }
-  }, [sites, siteId, setParams]);
-
-  const picker = (
-    <Field label="Site">
-      <select className="inp" style={{ width: 240 }} value={siteId}
-        onChange={(e) => setParams((p) => { p.set('site', e.target.value); return p; })}>
-        {(sites || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-      </select>
-    </Field>
-  );
-  return { siteId, sites, picker };
+  const { siteId, allSites, branchId } = useApp();
+  const sites = (allSites || []).filter((x) => !branchId || x.branch.id === branchId);
+  return { siteId: siteId ? String(siteId) : '', sites, picker: null };
 }
 
 /* ===================================================================
    Acknowledgements: what is waiting for this site's signature.
    =================================================================== */
 export function SiteInbox() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const [acking, setAcking] = useState(null);
   const [receiving, setReceiving] = useState(null);
   const { data, error, loading, reload } = useApi(
@@ -66,7 +59,6 @@ export function SiteInbox() {
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
-        <Card><div className="pad">{picker}</div></Card>
 
         {loading || !data ? <Loading /> : (
           <>
@@ -226,7 +218,7 @@ export function SiteInbox() {
    The site's own shelf. Quantities, never money.
    =================================================================== */
 export function SiteStock() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const [f, setF] = useState({ q: '', sort: 'item', hideEmpty: true });
   const [open, setOpen] = useState(null);
   const qs = new URLSearchParams({
@@ -257,7 +249,6 @@ export function SiteStock() {
 
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            {picker}
             <Field label="Find an item">
               <input className="inp" style={{ width: 250 }} value={f.q}
                 placeholder="By name or code"

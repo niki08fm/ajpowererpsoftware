@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, addDays } from '../api';
+import { api, qty, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, useToast,
@@ -19,10 +19,10 @@ export const SeverityTag = ({ severity, pct, count }) => {
 
 /* =================================================================== */
 export function Indents() {
-  const { branchId } = useApp();
+  const { branchId, siteId: chosenSite } = useApp();
   const nav = useNavigate();
   const { data, error, loading, reload } = useApi(
-    branchId ? `/indents?branchId=${branchId}` : null, [branchId]);
+    withBranch('/indents', branchId), [branchId]);
 
   const row = (i) => (
     <tr key={i.id} className="click" onClick={() => nav(`/indents/${i.id}`)}>
@@ -94,13 +94,13 @@ export function Indents() {
    line, not things that depend on a ceiling.
    =================================================================== */
 export function IndentCart() {
-  const { branchId } = useApp();
+  const { branchId, siteId: chosenSite } = useApp();
   const { id } = useParams();
   const nav = useNavigate();
   const toast = useToast();
 
   const { data: sites, loading: loadingSites } = useApi(
-    branchId ? `/indents/sites?branchId=${branchId}` : null, [branchId]);
+    withBranch('/indents/sites', branchId), [branchId]);
   const [siteId, setSiteId] = useState('');
   const site = (sites || []).find((s) => s.id === Number(siteId));
 
@@ -150,7 +150,12 @@ export function IndentCart() {
   const [dates, setDates] = useState({ indentDate: today(), neededBy: addDays(today(), 14) });
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (!siteId && sites?.length) setSiteId(String(sites[0].id)); }, [sites, siteId]);
+  // open on the site chosen for the Site department, when it can raise one
+  useEffect(() => {
+    if (siteId || !sites?.length) return;
+    const mine = sites.find((s) => s.id === Number(chosenSite));
+    setSiteId(String((mine || sites[0]).id));
+  }, [sites, siteId, chosenSite]);
   useEffect(() => {
     if (!existing) return;
     setSiteId(String(existing.site.id));

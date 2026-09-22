@@ -301,7 +301,7 @@ export function StoreTransfers() {
    The site's side: requests to answer, and what it has sent.
    ================================================================== */
 export function SiteTransfers() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const [show, setShow] = useState('OPEN');
   const [open, setOpen] = useState(null);
 
@@ -316,7 +316,6 @@ export function SiteTransfers() {
         {error && <ErrorNote error={error} onRetry={reload} />}
 
         <div className="searchbar">
-          {picker}
           <Field label="Show">
             <select className="inp" value={show} onChange={(e) => setShow(e.target.value)}>
               <option value="OPEN">Still open</option>
@@ -611,7 +610,7 @@ function SendModal({ tr, onClose, onSent }) {
    What this site has sent, document by document — and the reorder.
    ================================================================== */
 export function SentAndReorder() {
-  const { siteId, picker } = useSite();
+  const { siteId } = useSite();
   const [reordering, setReordering] = useState(false);
   const [openDoc, setOpenDoc] = useState(null);
   const hist = useApi(siteId ? `/transfers/site/${siteId}/history` : null, [siteId]);
@@ -641,7 +640,6 @@ export function SentAndReorder() {
         } />
       <div className="page-body">
         {hist.error && <ErrorNote error={hist.error} onRetry={hist.reload} />}
-        <div className="searchbar">{picker}</div>
 
         {lent.data && (
           <Card className="pad">

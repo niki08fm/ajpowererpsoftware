@@ -14,6 +14,7 @@ const { pool } = require('../src/config/db');
 const { setup } = require('../src/db/setup');
 const env = require('../src/config/env');
 const { resetTransactional } = require('./reset');
+const { signOff, signOnce, as, GM, MANAGEMENT } = require('./sign');
 
 const round3 = (n) => Math.round(Number(n) * 1000) / 1000;
 
@@ -70,6 +71,7 @@ describe('billing', () => {
     await api(`/boq/${S.boq}/wo-line/${S.wl2}`, { method: 'PUT', body: {
       estQty: 50, items: [{ itemId: S.box, itemQty: 1 }] } });
     await api(`/boq/${S.boq}/submit`, { method: 'POST', body: { overAllow: false } });
+    await signOff(api, `/boq/${S.boq}/decide`);
   });
 
   /* ------------------------------------------------------- the sheet */
@@ -119,7 +121,7 @@ describe('billing', () => {
         { boqLineId: at(S.plate, S.wl1), qty: 120 },
         { boqLineId: at(S.box, S.wl2), qty: 40 },
       ] } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
 
     const r = (await api(`/bills/sheet/${S.site}`)).body;
     assert.equal(Number(r.lines[0].indented_qty), 60,
@@ -151,6 +153,11 @@ describe('billing', () => {
     assert.match(r.body.docNo, /^RA\/\d\d-\d\d\/0001$/);
     assert.equal(Number(r.body.value), 60 * 900 + 20 * 500);
     S.ra1 = r.body.id;
+    // a bill asks a client for money, so it is signed twice before it
+    // leaves the building
+    const signed = await signOff(api, `/bills/${S.ra1}/decide`);
+    assert.equal(signed.status, 200);
+    assert.equal(signed.body.status, 'RAISED');
   });
 
   test('the sheet now knows what is left', async (t) => {
@@ -187,7 +194,7 @@ describe('billing', () => {
         { boqLineId: at(S.plate, S.wl1), qty: 80 },
         { boqLineId: at(S.box, S.wl2), qty: 10 },
       ] } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
 
     const r = (await api(`/bills/sheet/${S.site}`)).body;
     assert.equal(Number(r.lines[0].indented_qty), 100, '100 boxes, 200 plates');
@@ -239,8 +246,21 @@ describe('billing', () => {
 
   test('raising RA 2 closes both lines out completely', async (t) => {
     if (!live) return t.skip('no database');
-    const r = await api(`/bills/${S.ra2}/raise`, { method: 'POST' });
+    const sent = await api(`/bills/${S.ra2}/raise`, { method: 'POST' });
+    assert.equal(sent.status, 200);
+    assert.equal(sent.body.status, 'SUBMITTED', 'raising sends it to be signed');
+
+    // one signature is not enough to send a bill to a client
+    const once = await signOnce(api, `/bills/${S.ra2}/decide`);
+    assert.equal(once.body.done, false);
+    assert.equal(once.body.status, 'SUBMITTED');
+    const half = (await api(`/bills/sheet/${S.site}`)).body;
+    assert.equal(Number(half.lines[0].billed_qty), 60, 'still only RA 1 is billed');
+
+    const r = await as(api, MANAGEMENT)(`/bills/${S.ra2}/decide`,
+      { method: 'POST', body: { action: 'APPROVED' } });
     assert.equal(r.status, 200);
+    assert.equal(r.body.status, 'RAISED');
     const sheet = (await api(`/bills/sheet/${S.site}`)).body;
     assert.equal(Number(sheet.lines[0].billed_qty), 100);
     assert.equal(Number(sheet.lines[0].to_bill_qty), 0);
@@ -446,7 +466,7 @@ describe('billing', () => {
         { boqLineId: at(S.plate, S.wl1), qty: 30 },
       ] } });
     assert.equal(ind.status, 201, 'the BOQ allows indenting past the estimate');
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
 
     const sheet = (await api(`/bills/sheet/${S.site}`)).body;
     const l = sheet.lines.find((x) => x.wo_line_id === S.wl1);
@@ -473,6 +493,7 @@ describe('billing', () => {
       siteId: S.site, billDate: '2026-12-05', raise: true,
       lines: [{ woLineId: S.wl1, qty: all }] } });
     assert.equal(ok.status, 201, 'up to the indent goes through, past the order or not');
+    await signOff(api, `/bills/${ok.body.id}/decide`);
 
     const after = (await api(`/bills/sheet/${S.site}`)).body;
     const a = after.lines.find((x) => x.wo_line_id === S.wl1);

@@ -22,10 +22,16 @@ const { notFound, badRequest } = require('../lib/errors');
  * the challan, and read back from here.
  */
 
-/** Every store in the branch, with enough to choose between them. */
+/**
+ * Every store — in one branch, or in all of them — with enough to
+ * choose between them. Unfiltered is what the store chooser shows: a
+ * store team picks the store it works in, and the branch follows from
+ * that rather than being chosen first.
+ */
 async function storeList(branchId) {
   return many(
     `SELECT s.id, s.code, s.name, s.is_central, s.location,
+            s.branch_id, br.name AS branch_name, br.code AS branch_code,
             (SELECT COUNT(*) FROM v_stock_balance b
               WHERE b.site_id = s.id AND b.qty <> 0)            AS items,
             (SELECT COALESCE(SUM(ROUND(b.qty * b.latest_rate, 2)), 0) FROM v_stock_balance b
@@ -37,8 +43,10 @@ async function storeList(branchId) {
             (SELECT COUNT(*) FROM v_dc_status d
               WHERE d.from_site_id = s.id AND d.state IN ('IN_TRANSIT','PART_ACK')) AS out_unsigned
        FROM sites s
-      WHERE s.branch_id = ? AND s.site_type = 'STORE' AND s.status = 'ACTIVE'
-      ORDER BY s.is_central DESC, s.name`, [branchId]);
+       JOIN branches br ON br.id = s.branch_id
+      WHERE s.site_type = 'STORE' AND s.status = 'ACTIVE'
+        ${branchId ? 'AND s.branch_id = ?' : ''}
+      ORDER BY br.name, s.is_central DESC, s.name`, branchId ? [branchId] : []);
 }
 
 /** The branch's store. Central if one is marked, otherwise the first. */
@@ -72,7 +80,7 @@ async function requireStore(req) {
 
 /** The stores you can stand in. */
 router.get('/stores',
-  validate(z.object({ branchId: z.coerce.number().int().positive() }), 'query'),
+  validate(z.object({ branchId: z.coerce.number().int().positive().optional() }), 'query'),
   wrap(async (req, res) => {
     res.json(await storeList(req.query.branchId));
   })

@@ -23,7 +23,7 @@ export function Comparisons() {
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}), ...(f.q ? { q: f.q } : {}), status: f.status,
   }).toString();
-  const { data, error, loading, reload } = useApi(branchId ? `/comparisons?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/comparisons?${qs}`,
     [branchId, qs]);
   const rows = data || [];
 

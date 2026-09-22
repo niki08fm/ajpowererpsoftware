@@ -76,3 +76,12 @@ export const addDays = (d, n) => {
   t.setDate(t.getDate() + n);
   return t.toISOString().slice(0, 10);
 };
+
+/**
+ * A path scoped to one branch, or to every branch when there is none.
+ * `null` is how the app says "all branches", and it must leave the
+ * parameter out entirely — `branchId=null` is not "all", it is a 400.
+ */
+export const withBranch = (path, branchId) => (branchId
+  ? `${path}${path.includes('?') ? '&' : '?'}branchId=${branchId}`
+  : path);

@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * Rate comparison.
@@ -86,7 +87,9 @@ router.get('/:id', wrap(async (req, res) => {
 /* ----------------------------------------------------------- create */
 router.post('/',
   validate(z.object({
-    branchId: z.coerce.number().int().positive(),
+    // optional when indents are named: they carry their own branch, and
+    // a buyer looking at every branch has no single one to send
+    branchId: z.coerce.number().int().positive().optional(),
     title: z.string().trim().max(200).optional(),
     indentIds: z.array(z.coerce.number().int().positive()).max(100).default([]),
     items: z.array(z.object({
@@ -98,6 +101,28 @@ router.post('/',
   })),
   wrap(async (req, res) => {
     const b = req.body;
+
+    // One comparison is one branch: its suppliers, rates and the orders
+    // it leads to all belong to a branch. The indents it answers decide
+    // which, and indents from two branches cannot share one sheet.
+    let branchId = b.branchId;
+    if (b.indentIds.length) {
+      const brs = await many(
+        `SELECT DISTINCT i.branch_id, br.name FROM indents i
+           JOIN branches br ON br.id = i.branch_id
+          WHERE i.id IN (${b.indentIds.map(() => '?').join(',')})`, b.indentIds);
+      if (brs.length > 1) {
+        throw badRequest(
+          `Those indents are from ${brs.map((x) => x.name).join(' and ')}. `
+          + 'One comparison is one branch — compare each branch separately.');
+      }
+      if (brs.length && branchId && brs[0].branch_id !== branchId) {
+        throw badRequest(`Those indents are from ${brs[0].name}, not the branch this comparison names`);
+      }
+      if (brs.length) branchId = brs[0].branch_id;
+    }
+    if (!branchId) throw badRequest('Say which branch this comparison is for');
+
     // seeded from indents, or typed in directly — but not from nothing
     let lines = b.items;
     if (b.indentIds.length) {
@@ -115,7 +140,7 @@ router.post('/',
       const docNo = await nextDocNo(conn, 'CMP');
       const c = await run(
         `INSERT INTO comparisons (doc_no, branch_id, title, created_by) VALUES (?, ?, ?, ?)`,
-        [docNo, b.branchId, b.title || null, req.user?.id || null], conn);
+        [docNo, branchId, b.title || null, req.user?.id || null], conn);
       for (const id of new Set(b.indentIds)) {
         await run(`INSERT INTO comparison_indents (comparison_id, indent_id) VALUES (?, ?)`,
           [c.insertId, id], conn);
@@ -250,18 +275,81 @@ router.post('/:id/decide',
       );
     }
 
+    // Choosing the supplier is the buyer's decision and it is recorded
+    // as theirs; it is not the company's until it has been signed.
+    // Until then no order may be raised off this sheet, which is the
+    // point of comparing rates in front of somebody.
+    //
+    // A comparison belongs to a branch rather than a site — the buy
+    // list it came from can span several — so there is no site GM to
+    // sign it. Both levels are Management, and the chain's rule that
+    // one person may not sign twice keeps it two real signatures.
     await tx(async (conn) => {
       await run(
         `UPDATE comparisons SET status = 'DECIDED', chosen_supplier_id = ?,
                 decided_note = ?, decided_at = NOW() WHERE id = ?`,
         [req.body.supplierId, req.body.note || null, c.id], conn);
+      await chain.open(conn, { docType: 'COMPARISON', docId: c.id, docNo: c.doc_no,
+        branchId: c.branch_id, userId: req.user?.id, note: req.body.note });
       await log(conn, { entity: 'COMPARISON', entityId: c.id, docNo: c.doc_no,
-        action: 'Decided', detail: `${onSheet.supplier_name}${dearer ? ' (not the cheapest)' : ''}`
+        action: 'Decided, sent for approval',
+        detail: `${onSheet.supplier_name}${dearer ? ' (not the cheapest)' : ''}`
           + (req.body.note ? ` · ${req.body.note}` : ''), user: req.user });
     });
     res.json({
       ok: true, supplierId: req.body.supplierId, supplierName: onSheet.supplier_name,
-      landed: onSheet.landed, wasCheapest: !dearer,
+      landed: onSheet.landed, wasCheapest: !dearer, status: 'DECIDED',
+      message: `${onSheet.supplier_name} chosen — ${c.doc_no} now needs two signatures `
+        + 'before an order can be raised off it',
+    });
+  })
+);
+
+/**
+ * Sign the chosen rate, or send the sheet back to the buyer.
+ *
+ * Returning it reopens the comparison for a different choice rather
+ * than killing it — the quotes on it are still good.
+ */
+router.post('/:id/decide-approval',
+  validate(z.object({
+    action: z.enum(['APPROVED', 'RETURNED']),
+    note: z.string().trim().max(500).optional(),
+  })),
+  wrap(async (req, res) => {
+    const c = await one(`SELECT * FROM comparisons WHERE id = ?`, [req.params.id]);
+    if (!c) throw notFound('No such comparison');
+    if (c.status !== 'DECIDED') {
+      throw conflict(`This sheet is ${c.status.toLowerCase()}, not waiting for a signature`);
+    }
+    if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
+      throw badRequest('Say why it is going back');
+    }
+    let step;
+    await tx(async (conn) => {
+      step = await chain.decide(conn, { docType: 'COMPARISON', docId: c.id,
+        action: req.body.action, userId: req.user?.id, note: req.body.note });
+      if (req.body.action === 'RETURNED') {
+        await run(
+          `UPDATE comparisons SET status = 'DRAFT', chosen_supplier_id = NULL,
+                  decided_note = NULL, decided_at = NULL WHERE id = ?`, [c.id], conn);
+      } else if (step.done) {
+        await run(`UPDATE comparisons SET status = 'APPROVED' WHERE id = ?`, [c.id], conn);
+      }
+      await log(conn, { entity: 'COMPARISON', entityId: c.id, docNo: c.doc_no,
+        action: req.body.action === 'RETURNED' ? 'Returned to the buyer'
+          : step.done ? 'Approved' : 'Signed once',
+        detail: req.body.note, user: req.user });
+    });
+    res.json({
+      ok: true,
+      status: req.body.action === 'RETURNED' ? 'DRAFT' : step.done ? 'APPROVED' : 'DECIDED',
+      level: step.level, levels: step.levels, done: step.done,
+      message: req.body.action === 'RETURNED'
+        ? `${c.doc_no} is back with the buyer to choose again`
+        : step.done
+          ? `${c.doc_no} is approved — an order can be raised off it`
+          : `${c.doc_no} has one signature and needs a second from Management`,
     });
   })
 );
@@ -271,9 +359,15 @@ router.post('/:id/reopen', wrap(async (req, res) => {
   if (!c) throw notFound('No such comparison');
   const used = await one(`SELECT id FROM purchase_orders WHERE comparison_id = ?`, [c.id]);
   if (used) throw conflict('An order has already been raised from this comparison');
-  await run(
-    `UPDATE comparisons SET status = 'DRAFT', chosen_supplier_id = NULL,
-            decided_note = NULL, decided_at = NULL WHERE id = ?`, [c.id]);
+  await tx(async (conn) => {
+    await run(
+      `UPDATE comparisons SET status = 'DRAFT', chosen_supplier_id = NULL,
+              decided_note = NULL, decided_at = NULL WHERE id = ?`, [c.id], conn);
+    // the signatures were for a choice that no longer stands; the sheet
+    // starts again, and the old chain goes with the old decision
+    await run(`DELETE FROM approval_chains WHERE doc_type = 'COMPARISON' AND doc_id = ?`,
+      [c.id], conn);
+  });
   res.json({ ok: true });
 }));
 

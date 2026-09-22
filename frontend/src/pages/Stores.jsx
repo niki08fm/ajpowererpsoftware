@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp, PageHead } from '../App';
-import { api } from '../api';
+import { api, withBranch } from '../api';
 import {
   useApi, Card, Empty, Loading, ErrorNote, Modal, Field, Banner, useToast,
 } from '../components/ui';
@@ -10,22 +10,26 @@ import {
  * order, no BOQ — which is exactly why it is not on the sites screen.
  */
 export default function Stores() {
-  const { branchId, users } = useApp();
+  const { branchId, branches, users, loadPlaces } = useApp();
   const toast = useToast();
   const { data, error, loading, reload } = useApi(
-    branchId ? `/sites/stores/list?branchId=${branchId}` : null, [branchId]);
+    withBranch('/sites/stores/list', branchId), [branchId]);
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ name: '', keeperUserId: '', location: '' });
+  const [f, setF] = useState({ name: '', keeperUserId: '', location: '', branchId: '' });
+  // on every branch a new store still belongs to exactly one
+  const target = branchId || (f.branchId ? Number(f.branchId) : null);
 
   const save = async () => {
     try {
+      if (!target) { toast('Pick the branch this store belongs to', 'bad'); return; }
       await api.post('/sites/stores', {
-        name: f.name.trim(), branchId,
+        name: f.name.trim(), branchId: target,
         keeperUserId: f.keeperUserId ? Number(f.keeperUserId) : undefined,
         location: f.location || undefined,
       });
       toast('Store created', 'ok');
-      setOpen(false); setF({ name: '', keeperUserId: '', location: '' }); reload();
+      loadPlaces?.();
+      setOpen(false); setF({ name: '', keeperUserId: '', location: '', branchId: '' }); reload();
     } catch (e) { toast(e.message, 'bad'); }
   };
 
@@ -74,6 +78,15 @@ export default function Stores() {
             <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
             <button className="btn pri" onClick={save}>Create store</button>
           </>}>
+          {!branchId && (
+            <Field label="Branch" hint="You are viewing every branch, so say which one this store is in.">
+              <select className="inp" value={f.branchId}
+                onChange={(e) => setF((x) => ({ ...x, branchId: e.target.value }))}>
+                <option value="">— choose the branch —</option>
+                {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Store name">
             <input className="inp" autoFocus value={f.name} placeholder="e.g. Central Store — Hyderabad"
               onChange={(e) => setF({ ...f, name: e.target.value })} />

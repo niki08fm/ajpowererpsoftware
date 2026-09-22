@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * Billing the client.
@@ -276,9 +277,11 @@ router.post('/', validate(billBody), wrap(async (req, res) => {
           period_from, period_to, status, client_ref, note, created_by, raised_by, raised_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [docNo, raNo, site.id, site.branch_id, wo.id, site.client_id, b.billDate,
-       b.periodFrom || null, b.periodTo || null, b.raise ? 'RAISED' : 'DRAFT',
+       // "raise" now means "send it to be signed": a bill is the
+       // company asking a client for money, and two people say so
+       b.periodFrom || null, b.periodTo || null, b.raise ? 'SUBMITTED' : 'DRAFT',
        b.clientRef || null, b.note || null, req.user?.id || null,
-       b.raise ? (req.user?.id || null) : null, b.raise ? new Date() : null], conn);
+       null, null], conn);
 
     for (const c of checked) {
       await run(
@@ -288,10 +291,15 @@ router.post('/', validate(billBody), wrap(async (req, res) => {
          c.remark || null], conn);
     }
 
+    if (b.raise) {
+      await chain.open(conn, { docType: 'BILL', docId: bill.insertId, docNo,
+        branchId: site.branch_id, siteId: site.id, userId: req.user?.id });
+    }
+
     const v = await one(`SELECT * FROM v_bill_status WHERE bill_id = ?`, [bill.insertId], conn);
     await log(conn, {
       entity: 'RA', entityId: bill.insertId, docNo,
-      action: b.raise ? 'Raised' : 'Drafted',
+      action: b.raise ? 'Sent for approval' : 'Drafted',
       detail: `${site.name} · RA ${raNo} · ₹${money(v.bill_value)}`,
       user: req.user,
     });
@@ -307,7 +315,9 @@ router.put('/:id', validate(billBody.partial().omit({ siteId: true, raise: true 
     if (!EDITABLE.includes(bill.status)) {
       throw conflict(bill.status === 'RAISED'
         ? 'This bill has been raised — it is with the client and cannot be changed'
-        : 'This bill is cancelled');
+        : bill.status === 'SUBMITTED'
+          ? 'This bill is out for signature — send it back first to change it'
+          : 'This bill is cancelled');
     }
     const b = req.body;
     await tx(async (conn) => {
@@ -335,31 +345,96 @@ router.put('/:id', validate(billBody.partial().omit({ siteId: true, raise: true 
   })
 );
 
-/** Raising it is what makes it revenue. */
+/**
+ * Send it to be signed.
+ *
+ * This used to be the moment a bill became revenue. It is now the
+ * moment it goes for signature — the site's GM, then Management — and
+ * the second signature is what raises it. The route keeps its name
+ * because it is still the same button: "this bill is finished".
+ */
 router.post('/:id/raise', wrap(async (req, res) => {
   const bill = await requireBill(req.params.id);
   if (bill.status === 'RAISED') throw conflict('This bill has already been raised');
+  if (bill.status === 'SUBMITTED') throw conflict('This bill is already waiting to be signed');
   if (bill.status === 'CANCELLED') throw conflict('This bill is cancelled');
 
   await tx(async (conn) => {
     const lines = await many(
       `SELECT wo_line_id, qty FROM bill_lines WHERE bill_id = ?`, [bill.id], conn);
     if (!lines.length) throw badRequest('There is nothing on this bill');
-    // checked again at the moment it becomes real: another bill may
-    // have been raised against the same lines since the draft was made
     await checkLines(conn, bill.work_order_id,
       lines.map((l) => ({ woLineId: l.wo_line_id, qty: Number(l.qty) })), bill.id);
 
-    await run(
-      `UPDATE bills SET status = 'RAISED', raised_at = NOW(), raised_by = ? WHERE id = ?`,
-      [req.user?.id || null, bill.id], conn);
+    await run(`UPDATE bills SET status = 'SUBMITTED' WHERE id = ?`, [bill.id], conn);
+    await chain.open(conn, { docType: 'BILL', docId: bill.id, docNo: bill.doc_no,
+      branchId: bill.branch_id, siteId: bill.site_id, userId: req.user?.id });
     await log(conn, { entity: 'RA', entityId: bill.id, docNo: bill.doc_no,
-      action: 'Raised', detail: `RA ${bill.ra_no}`, user: req.user });
+      action: 'Sent for approval', detail: `RA ${bill.ra_no}`, user: req.user });
   });
 
   const v = await one(`SELECT * FROM v_bill_status WHERE bill_id = ?`, [bill.id]);
-  res.json({ ok: true, status: 'RAISED', value: Number(v.bill_value) });
+  res.json({
+    ok: true, status: 'SUBMITTED', value: Number(v.bill_value),
+    message: `${bill.doc_no} is with the site GM; it goes to the client once Management signs too`,
+  });
 }));
+
+/**
+ * Sign, or send back.
+ *
+ * The quantities are checked again on the last signature, not on the
+ * first. Between the two, another bill may have been raised against
+ * the same work order lines, and the figure that matters is the one
+ * true at the moment the bill becomes the client's.
+ */
+router.post('/:id/decide',
+  validate(z.object({
+    action: z.enum(['APPROVED', 'RETURNED']),
+    note: z.string().trim().max(500).optional(),
+  })),
+  wrap(async (req, res) => {
+    const bill = await requireBill(req.params.id);
+    if (bill.status !== 'SUBMITTED') {
+      throw conflict(`This bill is ${bill.status.toLowerCase()}, not waiting for a signature`);
+    }
+    if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
+      throw badRequest('Say why it is going back');
+    }
+    let step;
+    await tx(async (conn) => {
+      step = await chain.decide(conn, { docType: 'BILL', docId: bill.id,
+        action: req.body.action, userId: req.user?.id, note: req.body.note });
+      if (req.body.action === 'RETURNED') {
+        await run(`UPDATE bills SET status = 'DRAFT' WHERE id = ?`, [bill.id], conn);
+      } else if (step.done) {
+        const lines = await many(
+          `SELECT wo_line_id, qty FROM bill_lines WHERE bill_id = ?`, [bill.id], conn);
+        await checkLines(conn, bill.work_order_id,
+          lines.map((l) => ({ woLineId: l.wo_line_id, qty: Number(l.qty) })), bill.id);
+        await run(
+          `UPDATE bills SET status = 'RAISED', raised_at = NOW(), raised_by = ? WHERE id = ?`,
+          [req.user?.id || null, bill.id], conn);
+      }
+      await log(conn, { entity: 'RA', entityId: bill.id, docNo: bill.doc_no,
+        action: req.body.action === 'RETURNED' ? 'Returned to draft'
+          : step.done ? 'Raised' : 'Signed by the GM',
+        detail: `RA ${bill.ra_no}${req.body.note ? ` · ${req.body.note}` : ''}`, user: req.user });
+    });
+    const v = await one(`SELECT * FROM v_bill_status WHERE bill_id = ?`, [bill.id]);
+    res.json({
+      ok: true,
+      status: req.body.action === 'RETURNED' ? 'DRAFT' : step.done ? 'RAISED' : 'SUBMITTED',
+      level: step.level, levels: step.levels, done: step.done,
+      value: Number(v.bill_value),
+      message: req.body.action === 'RETURNED'
+        ? `${bill.doc_no} is back in draft with billing`
+        : step.done
+          ? `${bill.doc_no} is raised — it is the client's now`
+          : `${bill.doc_no} is signed by the GM and now waits for Management`,
+    });
+  })
+);
 
 /**
  * Cancelling one.

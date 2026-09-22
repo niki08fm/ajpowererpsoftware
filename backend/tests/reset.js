@@ -10,6 +10,9 @@
  * seeded, not written by tests.
  */
 const TABLES = [
+  // the approval chain first: it points at sites, and at the documents
+  // in every list below it
+  'approval_chain_events', 'approval_chains',
   // the store, newest first
   'dc_acknowledgement_lines', 'dc_acknowledgements',
   'dc_line_indents', 'dc_line_trs', 'delivery_challan_lines', 'delivery_challans',

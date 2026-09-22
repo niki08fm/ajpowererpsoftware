@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today } from '../api';
+import { api, qty, dmy, today, withBranch } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -274,8 +274,8 @@ export function Grns() {
 export function GrnRegister() {
   const { branchId } = useApp();
   const [f, setF] = useState({ q: '', status: 'ALL', from: '', to: '', sort: 'date', siteId: '' });
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
-  const { data: stores } = useApi(branchId ? `/sites/stores/list?branchId=${branchId}` : null,
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
+  const { data: stores } = useApi(withBranch('/sites/stores/list', branchId),
     [branchId]);
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}),
@@ -285,7 +285,7 @@ export function GrnRegister() {
     ...(f.to ? { to: f.to } : {}),
     status: f.status, sort: f.sort,
   }).toString();
-  const { data, error, loading, reload } = useApi(branchId ? `/grns?${qs}` : null, [branchId, qs]);
+  const { data, error, loading, reload } = useApi(`/grns?${qs}`, [branchId, qs]);
   const rows = data?.rows || [];
 
   const grab = () => downloadCsv('grn-register', [

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, money, qty, today, ApiError } from '../api';
+import { api, money, qty, today, ApiError, withBranch } from '../api';
 import { useApi, Card, Field, Banner, Empty, useToast, ClientPicker } from '../components/ui';
 
 /**
@@ -22,12 +22,17 @@ const blankLine = (uom) => ({ description: '', uom, qty: '', supplyRate: '', ins
 const lineTotal = (l) => (Number(l.qty) || 0) * ((Number(l.supplyRate) || 0) + (Number(l.instRate) || 0));
 
 export default function NewSite() {
-  const { branchId, branches, users } = useApp();
+  const { branchId: viewing, branches, users, loadPlaces } = useApp();
+  // Viewing every branch, a new site still has to belong to one. The
+  // branch decides which clients it may be given, so it is asked first.
+  const [pickedBranch, setPickedBranch] = useState('');
+  const branchId = viewing || (pickedBranch ? Number(pickedBranch) : null);
   const nav = useNavigate();
   const toast = useToast();
   const fileRef = useRef(null);
 
-  const { data: clients } = useApi(branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
+  const { data: clients } = useApi(
+    branchId ? withBranch('/masters/clients', branchId) : null, [branchId]);
   const { data: uoms } = useApi('/masters/uoms');
   const defaultUom = uoms?.find((u) => /^no/i.test(u.code))?.code || uoms?.[0]?.code || '';
 
@@ -54,6 +59,7 @@ export default function NewSite() {
 
   const next = () => {
     if (p.name.trim().length < 3) return toast('Give the site a name', 'bad');
+    if (!branchId) return toast('Pick the branch this site belongs to', 'bad');
     if (!p.clientId) return toast('Pick the client this site belongs to', 'bad');
     if (!p.headUserId) return toast('Choose the site head', 'bad');
     if (!p.keeperUserId) return toast('Choose the site storekeeper', 'bad');
@@ -109,6 +115,7 @@ export default function NewSite() {
         })),
       });
       toast(`${site.name} is live — ${site.code}`, 'ok');
+      loadPlaces?.();   // so the site team's cards include it straight away
       nav(`/sites/${site.id}`);
     } catch (e) {
       toast(e instanceof ApiError ? e.message : 'Could not create the site', 'bad');
@@ -126,6 +133,16 @@ export default function NewSite() {
           <div className="grid2">
             <Card title="The project" sub="Who it is for, who runs it, and where it is">
               <div className="pad">
+                {!viewing && (
+                  <Field label="Branch"
+                    hint="You are viewing every branch, so say which one this site belongs to. It decides which clients it can be given.">
+                    <select className="inp" style={{ width: 250 }} value={pickedBranch}
+                      onChange={(e) => { setPickedBranch(e.target.value); setP((x) => ({ ...x, clientId: '' })); }}>
+                      <option value="">— choose the branch —</option>
+                      {(branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Site name" hint="Checked against every site you already have, ignoring case and punctuation.">
                   <input className="inp" value={p.name} onChange={set('name')} autoFocus
                     placeholder="e.g. GMR Aerocity — Block C" />

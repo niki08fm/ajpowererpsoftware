@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { badRequest, conflict, notFound } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * Sourcing a PRN from another site.
@@ -489,6 +490,10 @@ router.post('/site/:siteId/reorder',
       if (req.body.send) {
         await run(`INSERT INTO indent_events (indent_id, action, user_id, note) VALUES (?, 'SUBMITTED', ?, ?)`,
           [r.insertId, req.user?.id || null, 'Replacing material lent to another site'], conn);
+        // a replacement PRN is still a PRN: the GM signs it, then
+        // Management, exactly like one raised off the BOQ
+        await chain.open(conn, { docType: 'PRN', docId: r.insertId, docNo,
+          branchId: site.branch_id, siteId, userId: req.user?.id });
       }
       await log(conn, { entity: 'INDENT', entityId: r.insertId, docNo,
         action: 'Raised to replace lent stock',

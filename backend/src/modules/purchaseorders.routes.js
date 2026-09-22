@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * Purchase orders.
@@ -248,6 +249,19 @@ router.post('/', validate(createBody), wrap(async (req, res) => {
 
   const dest = await checkDestination(indents, b.deliverToId);
 
+  // A rate comparison is the evidence for the rate on this order, and
+  // evidence nobody signed is not evidence. If the buyer cites one, it
+  // has to have cleared both levels first.
+  if (b.comparisonId) {
+    const cmp = await one(`SELECT doc_no, status FROM comparisons WHERE id = ?`, [b.comparisonId]);
+    if (!cmp) throw badRequest('That rate comparison does not exist');
+    if (cmp.status !== 'APPROVED') {
+      throw conflict(cmp.status === 'DECIDED'
+        ? `${cmp.doc_no} is still waiting to be signed — an order cannot be raised off it yet`
+        : `${cmp.doc_no} has not been decided`);
+    }
+  }
+
   const out = await tx(async (conn) => {
     const docNo = await nextDocNo(conn, 'PO', b.poDate);
     const po = await run(
@@ -275,6 +289,9 @@ router.post('/', validate(createBody), wrap(async (req, res) => {
       await run(`UPDATE purchase_orders SET submitted_at = NOW() WHERE id = ?`, [po.insertId], conn);
       await run(`INSERT INTO po_events (po_id, action, user_id) VALUES (?, 'SUBMITTED', ?)`,
         [po.insertId, req.user?.id || null], conn);
+      // raising it already sent is the same act as submitting it
+      await chain.open(conn, { docType: 'PO', docId: po.insertId, docNo,
+        branchId: branches[0], siteId: dest.id, userId: req.user?.id });
     }
     return { id: po.insertId, docNo };
   });
@@ -304,6 +321,10 @@ router.post('/:id/submit', wrap(async (req, res) => {
       [po.id], conn);
     await run(`INSERT INTO po_events (po_id, action, user_id) VALUES (?, 'SUBMITTED', ?)`,
       [po.id, req.user?.id || null], conn);
+    // the GM of the site it is being delivered to signs first, then
+    // Management; an order is money leaving the company
+    await chain.open(conn, { docType: 'PO', docId: po.id, docNo: po.doc_no,
+      branchId: po.branch_id, siteId: po.deliver_to_id, userId: req.user?.id });
     await log(conn, { entity: 'PO', entityId: po.id, docNo: po.doc_no,
       action: 'Sent to the GM', user: req.user });
   });
@@ -325,22 +346,39 @@ router.post('/:id/decide',
     if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
       throw badRequest('Say why it is going back');
     }
+    // an order is signed twice — the GM, then Management — and only
+    // the second signature lets it go to the supplier
+    let step;
     await tx(async (conn) => {
+      step = await chain.decide(conn, { docType: 'PO', docId: po.id,
+        action: req.body.action, userId: req.user?.id, note: req.body.note });
+      const status = req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'SUBMITTED';
       await run(
-        `UPDATE purchase_orders SET status = ?, decided_at = NOW(), decided_by = ? WHERE id = ?`,
-        [req.body.action, req.user?.id || null, po.id], conn
+        `UPDATE purchase_orders
+            SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?`,
+        [status, step.done || req.body.action === 'RETURNED' ? new Date() : null,
+          step.done ? req.user?.id || null : po.decided_by, po.id], conn
       );
+      const event = req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'GM_APPROVED';
       await run(`INSERT INTO po_events (po_id, action, user_id, note) VALUES (?, ?, ?, ?)`,
-        [po.id, req.body.action, req.user?.id || null, req.body.note || null], conn);
+        [po.id, event, req.user?.id || null, req.body.note || null], conn);
       await log(conn, { entity: 'PO', entityId: po.id, docNo: po.doc_no,
-        action: req.body.action === 'APPROVED' ? 'Approved' : 'Returned',
+        action: event === 'APPROVED' ? 'Approved'
+          : event === 'GM_APPROVED' ? 'Signed by the GM' : 'Returned',
         detail: req.body.note, user: req.user });
     });
     res.json({
-      ok: true, status: req.body.action,
-      message: req.body.action === 'APPROVED'
-        ? `${po.doc_no} is signed and can go to the supplier`
-        : `${po.doc_no} is back with the buyer`,
+      ok: true,
+      status: req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'SUBMITTED',
+      level: step.level, levels: step.levels, done: step.done,
+      message: req.body.action === 'RETURNED'
+        ? `${po.doc_no} is back with the buyer`
+        : step.done
+          ? `${po.doc_no} is signed and can go to the supplier`
+          : `${po.doc_no} is signed by the GM and now waits for Management`,
     });
   })
 );

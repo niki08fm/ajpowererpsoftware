@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today } from '../api';
+import { api, qty, dmy, today, withBranch } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Meter, useToast,
@@ -79,7 +79,7 @@ export function Challans() {
     // default to the shelf you are standing on, but it can be widened
     fromSiteId: params.get('from') || 'MINE',
   });
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const sentFrom = f.fromSiteId === 'MINE' ? storeId : f.fromSiteId;
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}),
@@ -90,7 +90,7 @@ export function Challans() {
     ...(f.to ? { to: f.to } : {}),
     state: f.state, sort: f.sort,
   }).toString();
-  const { data, error, loading, reload } = useApi(branchId ? `/challans?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/challans?${qs}`,
     [branchId, qs]);
   const rows = data || [];
   const out = rows.filter((r) => Number(r.in_transit_qty) > 0);

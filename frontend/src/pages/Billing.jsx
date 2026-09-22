@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today } from '../api';
+import { api, qty, money, dmy, today, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter,
@@ -36,6 +36,9 @@ const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
 
 const STATUS = {
   DRAFT:     { tone: '',     word: 'Draft' },
+  // between the two: finished, signed once or not at all, and not yet
+  // the client's — it is not revenue until both signatures are on it
+  SUBMITTED: { tone: 'warn', word: 'Waiting to be signed' },
   RAISED:    { tone: 'ok',   word: 'Raised' },
   CANCELLED: { tone: 'bad',  word: 'Cancelled' },
 };
@@ -53,12 +56,13 @@ export function Billing() {
   const q = params.get('q') || '';
   const client = params.get('client') || '';
   const { data: clients } = useApi(
-    branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
+    withBranch('/masters/clients', branchId), [branchId]);
   const { data, error, loading, reload } = useApi(
-    branchId
-      ? `/bills/sites?branchId=${branchId}${client ? `&clientId=${client}` : ''}`
-        + `${q ? `&q=${encodeURIComponent(q)}` : ''}`
-      : null,
+    `/bills/sites?${new URLSearchParams({
+      ...(branchId ? { branchId } : {}),
+      ...(client ? { clientId: client } : {}),
+      ...(q ? { q } : {}),
+    })}`,
     [branchId, q, client]);
   const rows = data?.rows || [];
 
@@ -617,6 +621,12 @@ export function BillCard({ id, onClose, onChanged }) {
             bill could take the same work first.
           </Banner>
         )}
+        {head.status === 'SUBMITTED' && (
+          <Banner kind="warn" icon="…">
+            Waiting to be signed — the site GM first, then Management. It goes to the
+            client on the second signature, and is not revenue until then.
+          </Banner>
+        )}
         {head.status === 'CANCELLED' && (
           <Banner kind="bad" icon="!">
             Cancelled{head.note ? ` — ${head.note}` : ''}. What it billed is free to be
@@ -702,7 +712,7 @@ export function Bills() {
   const q = params.get('q') || '';
   const client = params.get('client') || '';
   const { data: clients } = useApi(
-    branchId ? `/masters/clients?branchId=${branchId}` : null, [branchId]);
+    withBranch('/masters/clients', branchId), [branchId]);
 
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}), status,
@@ -710,7 +720,7 @@ export function Bills() {
     ...(q ? { q } : {}),
   }).toString();
   const { data, error, loading, reload } = useApi(
-    branchId ? `/bills?${qs}` : null, [qs, tick]);
+    `/bills?${qs}`, [qs, tick]);
   const rows = data?.rows || [];
 
   const set = (patch) => setParams((p) => {
@@ -735,6 +745,7 @@ export function Bills() {
                 onChange={(e) => set({ status: e.target.value })}>
                 <option value="ALL">Everything</option>
                 <option value="RAISED">Raised</option>
+                <option value="SUBMITTED">Waiting to be signed</option>
                 <option value="DRAFT">Drafts</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>

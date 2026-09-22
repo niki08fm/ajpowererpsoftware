@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, addDays } from '../api';
+import { api, qty, money, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -207,7 +207,7 @@ export function Prns() {
   const toast = useToast();
   const [f, setF] = useState({ q: '', siteId: '', show: 'PENDING', sort: 'needed' });
   const [picked, setPicked] = useState([]);
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}),
     ...(f.q ? { q: f.q } : {}),
@@ -217,7 +217,7 @@ export function Prns() {
   }).toString();
   // the shelf you are standing on follows through to the sheet
   const carry = storeId ? `&store=${storeId}` : '';
-  const { data, error, loading, reload } = useApi(branchId ? `/store/prns?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/store/prns?${qs}`,
     [branchId, qs]);
   const rows = data?.rows || [];
 
@@ -695,7 +695,7 @@ export function Stock() {
     ...(f.q ? { q: f.q } : {}),
     sort: f.sort, hideEmpty: String(f.hideEmpty),
   }).toString();
-  const { data, error, loading, reload } = useApi(branchId ? `/store/stock?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/store/stock?${qs}`,
     [branchId, qs]);
   const rows = data?.rows || [];
 
@@ -996,7 +996,7 @@ export function Movements() {
     ...(f.to ? { to: f.to } : {}),
     direction: f.direction,
   }).toString();
-  const { data, error, loading, reload } = useApi(branchId ? `/store/movements?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/store/movements?${qs}`,
     [branchId, qs]);
   const rows = data?.rows || [];
   const docs = data?.docs || [];

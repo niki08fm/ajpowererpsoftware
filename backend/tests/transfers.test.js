@@ -20,6 +20,7 @@ const { pool } = require('../src/config/db');
 const { setup } = require('../src/db/setup');
 const env = require('../src/config/env');
 const { resetTransactional } = require('./reset');
+const { signOff, signOnce, as, GM, MANAGEMENT } = require('./sign');
 
 let server; let base; let live = false;
 const api = (path, opts = {}) =>
@@ -54,6 +55,7 @@ async function siteWithBoq(name, itemId, woQty, estQty) {
   await api(`/boq/${prep.boqId}/wo-line/${sheet.woLines[0].wo_line_id}`, { method: 'PUT', body: {
     estQty, items: [{ itemId, itemQty: 1 }] } });
   await api(`/boq/${prep.boqId}/submit`, { method: 'POST', body: { overAllow: true, overPct: 100 } });
+  await signOff(api, `/boq/${prep.boqId}/decide`);
   const lines = (await api(`/indents/boq/${prep.boqId}/lines`)).body;
   return { id: site.id, name, boqId: prep.boqId, boqLineId: lines[0].boq_line_id, woId: wo.id };
 }
@@ -78,7 +80,7 @@ describe('sourcing a PRN from another site', () => {
     const ind = await api('/indents', { method: 'POST', body: {
       siteId: S.a.id, indentDate: today(),
       lines: [{ boqLineId: S.a.boqLineId, qty: 60 }], send: true } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
     await pool.query(
       `INSERT INTO stock_movements (site_id, item_id, qty, rate, kind, ref_no, moved_on)
        VALUES (?, ?, 60, 112, 'GRN', 'SEED', ?)`, [S.a.id, S.box, today()]);
@@ -93,7 +95,7 @@ describe('sourcing a PRN from another site', () => {
     const ind = await api('/indents', { method: 'POST', body: {
       siteId: S.b.id, indentDate: today(), neededBy: today(),
       lines: [{ boqLineId: S.b.boqLineId, qty: 20 }], send: true } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
     S.prn = ind.body.id;
     S.prnNo = ind.body.docNo;
   });
@@ -249,7 +251,7 @@ describe('sourcing a PRN from another site', () => {
     assert.equal(r.body.kind, 'REPLACEMENT');
     S.reorder = r.body.id;
 
-    await api(`/indents/${S.reorder}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${S.reorder}/decide`);
     const prns = (await api(`/store/prns?storeId=${S.store}&show=ALL`)).body;
     assert.ok(prns.rows.some((x) => x.indent_id === S.reorder),
       'the store has to fulfil it like any other PRN');

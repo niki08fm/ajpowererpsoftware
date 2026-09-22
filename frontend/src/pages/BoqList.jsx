@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { AmendSheet, BoqHistory } from './BoqAmend';
-import { api, qty } from '../api';
+import { api, qty, withBranch } from '../api';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Meter, Modal, Field,
   ItemPicker, useToast, Banner, Stat,
@@ -14,7 +14,7 @@ import {
 export function BoqList() {
   const { branchId } = useApp();
   const toast = useToast();
-  const { data, error, loading, reload } = useApi(branchId ? `/boq?branchId=${branchId}` : null, [branchId]);
+  const { data, error, loading, reload } = useApi(withBranch('/boq', branchId), [branchId]);
   // the sheet opens over the list rather than taking you somewhere else,
   // so you never lose your place in the department
   const [openId, setOpenId] = useState(null);
@@ -95,7 +95,10 @@ export function BoqList() {
                         <td>
                           {b.state === 'AMENDMENT_DUE'
                             ? <Tag kind="bad">▲ Amendment due · {Number(b.worst_over_pct).toFixed(1)}%</Tag>
-                            : b.state === 'LOCKED' ? <Tag kind="ok">Locked</Tag> : <Tag kind="warn">Draft</Tag>}
+                            : b.status === 'LOCKED' ? <Tag kind="ok">Locked</Tag>
+                              : b.status === 'SUBMITTED'
+                                ? <Tag kind="warn">Waiting to be signed</Tag>
+                                : <Tag kind="warn">Draft</Tag>}
                         </td>
                         <td className="rt" onClick={(e) => e.stopPropagation()}>
                           <button className="btn sm" onClick={() => setHistoryId(b.id)}>History</button>{' '}
@@ -197,7 +200,9 @@ export function BoqSheet({ boqId, onClose }) {
     );
   }
 
-  const locked = data.status === 'LOCKED';
+  // out for signature is as closed as locked: changing a line under a
+  // signature means the thing that was signed is not the thing you have
+  const locked = data.status === 'LOCKED' || data.status === 'SUBMITTED';
   const onSheet = (shown || []);
   const pending = data.woLines.filter((w) => !onSheet.includes(w.wo_line_id));
   const patch = (lid, fn) => setEdit((d) => ({ ...d, [lid]: fn(d[lid]) }));

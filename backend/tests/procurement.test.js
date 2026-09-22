@@ -14,6 +14,7 @@ const { pool } = require('../src/config/db');
 const { setup } = require('../src/db/setup');
 const env = require('../src/config/env');
 const { resetTransactional } = require('./reset');
+const { signOff, signOnce, as, GM, MANAGEMENT } = require('./sign');
 
 let server; let base; let live = false;
 const api = (path, opts = {}) =>
@@ -61,6 +62,7 @@ describe('procurement', () => {
         body: { estQty: 100, items: [{ itemId: S.box, itemQty: 1 }, { itemId: S.plate, itemQty: 2 }] },
       });
       await api(`/boq/${prep.body.boqId}/submit`, { method: 'POST', body: { overAllow: false } });
+      await signOff(api, `/boq/${prep.body.boqId}/decide`);
     }
     assert.ok(S.sitea && S.siteb);
   });
@@ -85,7 +87,7 @@ describe('procurement', () => {
         lines: [{ boqLineId: box.boq_line_id, qty: key === 'a' ? 60 : 40 }],
         send: true } });
       S[`ind${key}`] = r.body.id;
-      await api(`/indents/${r.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+      await signOff(api, `/indents/${r.body.id}/decide`);
     }
     assert.ok(S.inda && S.indb);
   });
@@ -199,13 +201,13 @@ describe('procurement', () => {
 
   test('the GM sends it back, and has to say why', async (t) => {
     if (!live) return t.skip('no database');
-    const silent = await api(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
+    const silent = await as(api, GM)(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
       action: 'RETURNED' } });
     assert.equal(silent.status, 400);
 
-    const r = await api(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
+    const r = await as(api, GM)(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
       action: 'RETURNED', note: 'rate is above the last comparison, renegotiate' } });
-    assert.equal(r.status, 200);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
     const po = (await api(`/purchase-orders/${S.po}`)).body;
     assert.equal(po.stage, 'RETURNED');
     assert.equal(po.canEdit, true);
@@ -234,10 +236,21 @@ describe('procurement', () => {
     assert.ok(Number(after.po_value) < Number(po.po_value));
   });
 
-  test('the GM signs it, and only then is it ordered', async (t) => {
+  test('one signature is not enough to send an order to a supplier', async (t) => {
     if (!live) return t.skip('no database');
-    const r = await api(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
-      action: 'APPROVED', note: 'ok at the revised rate' } });
+    const first = await signOnce(api, `/purchase-orders/${S.po}/decide`,
+      { note: 'ok at the revised rate' });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.done, false);
+
+    const po = (await api(`/purchase-orders/${S.po}`)).body;
+    assert.equal(po.stage, 'AWAITING_GM', 'still waiting, now on the second desk');
+  });
+
+  test('Management signs it, and only then is it ordered', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = await as(api, MANAGEMENT)(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
+      action: 'APPROVED', note: 'approved' } });
     assert.equal(r.status, 200);
     assert.match(r.body.message, /signed/);
 
@@ -342,7 +355,7 @@ describe('procurement', () => {
     const ind = await api('/indents', { method: 'POST', body: {
       siteId: S.sitea, indentDate: '2026-09-22',
       lines: [{ boqLineId: plate.boq_line_id, qty: 10 }], send: true } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
 
     const d = (await api('/procurement/demand', { method: 'POST', body: {
       indentIds: [ind.body.id] } })).body;
@@ -364,7 +377,7 @@ describe('procurement', () => {
     const ind = await api('/indents', { method: 'POST', body: {
       siteId: S.siteb, indentDate: '2026-09-23',
       lines: [{ boqLineId: plate.boq_line_id, qty: 200 }], send: true } });
-    await api(`/indents/${ind.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${ind.body.id}/decide`);
     S.cmpIndent = ind.body.id;
 
     const r = await api('/comparisons', { method: 'POST', body: {
@@ -457,8 +470,24 @@ describe('procurement', () => {
     assert.equal(r.status, 409);
   });
 
+  test('an order cannot be raised off a comparison nobody has signed', async (t) => {
+    if (!live) return t.skip('no database');
+    const c = (await api(`/comparisons/${S.cmp}`)).body;
+    const early = await api('/purchase-orders', { method: 'POST', body: {
+      supplierId: c.chosen_supplier_id, indentIds: [S.cmpIndent], deliverToId: S.siteb,
+      poDate: '2026-09-24', comparisonId: c.comparison_id,
+      lines: [{ itemId: S.plate, qty: 200, rate: 40, gstRate: 18 }] } });
+    assert.equal(early.status, 409);
+    assert.match(early.body.error.message, /waiting to be signed/);
+  });
+
   test('the order carries the comparison it came from', async (t) => {
     if (!live) return t.skip('no database');
+    // both signatures on the chosen rate first
+    const signed = await signOff(api, `/comparisons/${S.cmp}/decide-approval`);
+    assert.equal(signed.status, 200);
+    assert.equal(signed.body.status, 'APPROVED');
+
     const c = (await api(`/comparisons/${S.cmp}`)).body;
     const r = await api('/purchase-orders', { method: 'POST', body: {
       supplierId: c.chosen_supplier_id, indentIds: [S.cmpIndent], deliverToId: S.siteb,
@@ -692,7 +721,7 @@ describe('procurement', () => {
       const r = await api('/indents', { method: 'POST', body: {
         siteId: S.sitea, indentDate: '2026-09-29', neededBy: '2026-10-05',
         lines: [{ boqLineId: box.boq_line_id, qty: q }], send: true } });
-      await api(`/indents/${r.body.id}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+      await signOff(api, `/indents/${r.body.id}/decide`);
       S.pair.push(r.body.id);
     }
 

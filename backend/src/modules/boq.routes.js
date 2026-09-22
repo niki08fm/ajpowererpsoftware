@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * The BOQ. Each work order line prepared as items from the master.
@@ -238,6 +239,7 @@ router.post('/:id/submit',
   wrap(async (req, res) => {
     const boq = await loadBoq(req.params.id);
     if (boq.status === 'LOCKED') throw conflict('Already locked');
+    if (boq.status === 'SUBMITTED') throw conflict('Already waiting for approval');
     if (boq.prepared_count !== boq.wo_line_count) {
       throw badRequest(
         `${boq.wo_line_count - boq.prepared_count} work order line(s) are not prepared yet`,
@@ -245,21 +247,76 @@ router.post('/:id/submit',
       );
     }
     const { overAllow, overPct } = req.body;
+    // Submitting no longer locks it. The BOQ is what every indent,
+    // order and bill on this site is measured against, so it is signed
+    // twice — the site's GM, then Management — and it locks on the
+    // second signature. The beyond-estimate policy travels with it, so
+    // what is being approved includes how far over the estimate the
+    // site may go.
     await tx(async (conn) => {
       await run(
-        `UPDATE boqs SET status='LOCKED', over_allow=?, over_pct=?, submitted_at=NOW()
+        `UPDATE boqs SET status='SUBMITTED', over_allow=?, over_pct=?, submitted_at=NOW()
           WHERE id=? AND status='DRAFT'`,
         [overAllow ? 1 : 0, overAllow ? overPct : 0, boq.id], conn
       );
+      await chain.open(conn, { docType: 'BOQ', docId: boq.id, docNo: boq.doc_no,
+        branchId: boq.branch_id, siteId: boq.site_id, userId: req.user?.id });
       await log(conn, {
-        entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no, action: 'Submitted and locked',
+        entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no, action: 'Sent for approval',
         detail: `beyond estimate: ${overAllow ? (overPct ? `${overPct}% allowed` : 'allowed, no ceiling') : 'not allowed'}`,
         user: req.user,
       });
     });
     res.json({
-      ok: true, docNo: boq.doc_no,
+      ok: true, docNo: boq.doc_no, status: 'SUBMITTED',
+      message: `${boq.doc_no} is with the site GM; it locks once Management has signed too`,
       policy: { overAllow, overPct: overAllow ? overPct : 0 },
+    });
+  })
+);
+
+/**
+ * Sign, or send back.
+ *
+ * A BOQ that is sent back returns to draft, because the only reason to
+ * send one back is to change a line on it — and changing a line is
+ * something only a draft allows.
+ */
+router.post('/:id/decide',
+  validate(z.object({
+    action: z.enum(['APPROVED', 'RETURNED']),
+    note: z.string().trim().max(500).optional(),
+  })),
+  wrap(async (req, res) => {
+    const boq = await one(`SELECT * FROM boqs WHERE id = ?`, [req.params.id]);
+    if (!boq) throw notFound('No such BOQ');
+    if (boq.status !== 'SUBMITTED') {
+      throw conflict(`This BOQ is ${boq.status.toLowerCase()}, not waiting for a signature`);
+    }
+    if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
+      throw badRequest('Say why it is going back');
+    }
+    let step;
+    await tx(async (conn) => {
+      step = await chain.decide(conn, { docType: 'BOQ', docId: boq.id,
+        action: req.body.action, userId: req.user?.id, note: req.body.note });
+      const status = req.body.action === 'RETURNED' ? 'DRAFT'
+        : step.done ? 'LOCKED' : 'SUBMITTED';
+      await run(`UPDATE boqs SET status = ? WHERE id = ?`, [status, boq.id], conn);
+      await log(conn, { entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no,
+        action: req.body.action === 'RETURNED' ? 'Returned to draft'
+          : step.done ? 'Approved and locked' : 'Signed by the GM',
+        detail: req.body.note, user: req.user });
+    });
+    res.json({
+      ok: true,
+      status: req.body.action === 'RETURNED' ? 'DRAFT' : step.done ? 'LOCKED' : 'SUBMITTED',
+      level: step.level, levels: step.levels, done: step.done,
+      message: req.body.action === 'RETURNED'
+        ? `${boq.doc_no} is back in draft with planning`
+        : step.done
+          ? `${boq.doc_no} is approved and locked — the site can indent against it`
+          : `${boq.doc_no} is signed by the GM and now waits for Management`,
     });
   })
 );

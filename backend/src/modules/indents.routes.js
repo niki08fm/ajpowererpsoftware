@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { notFound, badRequest, conflict } = require('../lib/errors');
+const chain = require('../lib/approvals');
 
 /**
  * Indents. A cart, then a document.
@@ -201,6 +202,10 @@ router.post('/', validate(indentBody.extend({ send: z.boolean().default(false) }
       if (b.send) {
         await run(`INSERT INTO indent_events (indent_id, action, user_id) VALUES (?, 'SUBMITTED', ?)`,
           [r.insertId, req.user?.id || null], conn);
+        // raising it already sent is the same act as submitting one,
+        // and it opens the same chain — the GM, then Management
+        await chain.open(conn, { docType: 'PRN', docId: r.insertId, docNo,
+          branchId: site.branch_id, siteId: site.id, userId: req.user?.id });
       }
       const over = priced.filter((l) => l.overQty > 0);
       await log(conn, {
@@ -258,15 +263,26 @@ router.post('/:id/submit', wrap(async (req, res) => {
     await run(`UPDATE indents SET status = 'SUBMITTED' WHERE id = ?`, [ind.id], conn);
     await run(`INSERT INTO indent_events (indent_id, action, user_id) VALUES (?, 'SUBMITTED', ?)`,
       [ind.id, req.user?.id || null], conn);
+    // two signatures from here: the site's GM, then Management
+    await chain.open(conn, { docType: 'PRN', docId: ind.id, docNo: ind.doc_no,
+      branchId: ind.branch_id, siteId: ind.site_id, userId: req.user?.id });
     await log(conn, { entity: 'INDENT', entityId: ind.id, docNo: ind.doc_no, action: 'Submitted', user: req.user });
   });
   res.json({ ok: true, docNo: ind.doc_no, status: 'SUBMITTED' });
 }));
 
 /**
- * Approve or return. Deliberately open to anyone for now — who signs is
- * part of the access decision we have not taken. The trail is recorded
- * either way, so nothing is lost by deciding later.
+ * Sign, or send back.
+ *
+ * Two signatures stand between a PRN and the buy list — the site's GM,
+ * then Management — so an approval here may or may not be the one that
+ * approves it. The chain says which, and the indent only reaches
+ * APPROVED when both are in; until then it stays SUBMITTED, which is
+ * what every other query in the system already treats as "not yet
+ * yours to act on".
+ *
+ * The level-1 signature is logged as GM_APPROVED rather than APPROVED,
+ * so counting approvals still counts documents rather than signatures.
  */
 router.post('/:id/decide',
   validate(z.object({ action: z.enum(['APPROVED', 'RETURNED']), note: z.string().trim().max(500).optional() })),
@@ -274,14 +290,31 @@ router.post('/:id/decide',
     const ind = await one(`SELECT * FROM indents WHERE id = ?`, [req.params.id]);
     if (!ind) throw notFound('No such indent');
     if (ind.status !== 'SUBMITTED') throw conflict(`This indent is ${ind.status.toLowerCase()}, not waiting`);
+    let step;
     await tx(async (conn) => {
-      await run(`UPDATE indents SET status = ? WHERE id = ?`, [req.body.action, ind.id], conn);
+      step = await chain.decide(conn, { docType: 'PRN', docId: ind.id,
+        action: req.body.action, userId: req.user?.id, note: req.body.note });
+      const status = req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'SUBMITTED';
+      await run(`UPDATE indents SET status = ? WHERE id = ?`, [status, ind.id], conn);
+      const event = req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'GM_APPROVED';
       await run(`INSERT INTO indent_events (indent_id, action, user_id, note) VALUES (?, ?, ?, ?)`,
-        [ind.id, req.body.action, req.user?.id || null, req.body.note || null], conn);
+        [ind.id, event, req.user?.id || null, req.body.note || null], conn);
       await log(conn, { entity: 'INDENT', entityId: ind.id, docNo: ind.doc_no,
-        action: req.body.action, detail: req.body.note, user: req.user });
+        action: event, detail: req.body.note, user: req.user });
     });
-    res.json({ ok: true, status: req.body.action });
+    res.json({
+      ok: true,
+      status: req.body.action === 'RETURNED' ? 'RETURNED'
+        : step.done ? 'APPROVED' : 'SUBMITTED',
+      level: step.level, levels: step.levels, done: step.done,
+      message: req.body.action === 'RETURNED'
+        ? `${ind.doc_no} is back with the site`
+        : step.done
+          ? `${ind.doc_no} is approved and on the buy list`
+          : `${ind.doc_no} is signed by the GM and now waits for Management`,
+    });
   })
 );
 

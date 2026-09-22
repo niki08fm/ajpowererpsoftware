@@ -42,7 +42,7 @@ export function PurchaseOrders() {
     stage: f.stage, sort: f.sort,
   }).toString();
 
-  const { data, error, loading, reload } = useApi(branchId ? `/purchase-orders?${qs}` : null,
+  const { data, error, loading, reload } = useApi(`/purchase-orders?${qs}`,
     [branchId, qs]);
   const { data: suppliers } = useApi('/suppliers');
   const rows = data || [];

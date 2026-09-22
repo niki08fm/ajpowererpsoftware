@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 're
 import { api, setUserId, getUserId } from './api';
 import { ToastHost, Loading, ErrorNote, useApi } from './components/ui';
 import { Chooser } from './pages/Choose';
-import Desk from './pages/Desk';
 import { Approvals, Decided } from './pages/Approvals';
 
 import Sites from './pages/Sites';
@@ -71,7 +70,6 @@ export const SECTIONS = [
     label: 'Planning',
     icon: '▤',
     screens: [
-      { to: '/desk/plan', label: 'Overview' },
       { to: '/sites', label: 'Sites' },
       { to: '/boq', label: 'BOQ', badge: 'amendmentDue' },
       { to: '/clients', label: 'Clients' },
@@ -84,7 +82,6 @@ export const SECTIONS = [
     label: 'Site',
     icon: '◍',
     screens: [
-      { to: '/desk/site', label: 'Overview' },
       { to: '/indents', label: 'Indents', badge: 'indentsWaiting' },
       { to: '/site/inbox', label: 'Acknowledgements' },
       { to: '/site/stock', label: 'Site store' },
@@ -103,7 +100,6 @@ export const SECTIONS = [
     label: 'Store',
     icon: '▥',
     screens: [
-      { to: '/desk/store', label: 'Overview' },
       { to: '/store/prns', label: 'PRNs to fulfil' },
       { to: '/grns', label: 'Receive (GRN)' },
       { to: '/challans', label: 'Challans' },
@@ -118,7 +114,6 @@ export const SECTIONS = [
     label: 'Procure',
     icon: '◆',
     screens: [
-      { to: '/desk/procure', label: 'Overview' },
       { to: '/procurement', label: 'To buy' },
       { to: '/comparisons', label: 'Rate comparison' },
       { to: '/purchase-orders', label: 'Orders' },
@@ -130,7 +125,6 @@ export const SECTIONS = [
     label: 'Billing',
     icon: '₹',
     screens: [
-      { to: '/desk/billing', label: 'Overview' },
       { to: '/billing', label: 'Bill a site', end: true },
       { to: '/billing/bills', label: 'Bills' },
     ],
@@ -140,7 +134,6 @@ export const SECTIONS = [
     label: 'Reports',
     icon: '☷',
     screens: [
-      { to: '/desk/reports', label: 'Overview' },
       { to: '/reports/expense', label: 'Expense report' },
       { to: '/reports/pl', label: 'Profit and loss' },
     ],
@@ -503,9 +496,14 @@ export default function App() {
         <BrowserRouter>
           <Shell>
             <Routes>
-              <Route path="/" element={<Navigate to="/desk/plan" replace />} />
+              <Route path="/" element={<Navigate to="/approvals" replace />} />
+              {/* The department overview desks are parked, not deleted:
+                  pages/Desk.jsx and the /desk API are still here, and
+                  bringing them back is this route and one nav row each.
+                  Approvals is the landing screen while they are away. */}
               {['plan', 'site', 'store', 'procure', 'billing', 'reports'].map((d) => (
-                <Route key={d} path={`/desk/${d}`} element={<Desk dept={d} />} />
+                <Route key={d} path={`/desk/${d}`}
+                  element={<Navigate to="/approvals" replace />} />
               ))}
               <Route path="/approvals" element={<Approvals />} />
               <Route path="/approvals/decided" element={<Decided />} />
@@ -516,7 +514,7 @@ export default function App() {
               <Route path="/boq" element={<BoqList />} />
               <Route path="/items" element={<Items />} />
               <Route path="/clients" element={<Clients />} />
-              <Route path="/store" element={<Navigate to="/desk/store" replace />} />
+              <Route path="/store" element={<Navigate to="/store/prns" replace />} />
               <Route path="/store/prns" element={<Prns />} />
               <Route path="/store/source" element={<SourceFromSitePage />} />
               <Route path="/store/transfers" element={<StoreTransfers />} />

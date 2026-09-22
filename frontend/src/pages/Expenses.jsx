@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, money, dmy, today } from '../api';
+import { api, money, dmy, today, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat,
@@ -353,7 +353,7 @@ function ExpenseCard({ id, onClose, onChanged }) {
    The register
    =================================================================== */
 export default function Expenses() {
-  const { branchId } = useApp();
+  const { branchId, siteId } = useApp();
   const [params, setParams] = useSearchParams();
   const [claiming, setClaiming] = useState(false);
   const [open, setOpen] = useState(null);
@@ -367,9 +367,9 @@ export default function Expenses() {
     return p;
   }, { replace: true });
 
-  const site = get('site');
+  const site = get('site', String(siteId || ''));
   const status = get('status', 'ALL');
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const { data: categories } = useApi('/expenses/categories');
 
   const qs = new URLSearchParams({
@@ -384,7 +384,7 @@ export default function Expenses() {
   }).toString();
 
   const { data, error, loading, reload } = useApi(
-    branchId ? `/expenses?${qs}` : null, [qs, tick]);
+    `/expenses?${qs}`, [qs, tick]);
   const rows = data?.rows || [];
   const refresh = () => { setTick((t) => t + 1); reload(); };
 

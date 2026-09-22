@@ -19,6 +19,7 @@ const { pool } = require('../src/config/db');
 const { setup } = require('../src/db/setup');
 const env = require('../src/config/env');
 const { resetTransactional } = require('./reset');
+const { signOff, signOnce, as, GM, MANAGEMENT } = require('./sign');
 
 let server; let base; let live = false;
 const api = (path, opts = {}) =>
@@ -154,11 +155,33 @@ describe('planning and site', () => {
     assert.equal(back.woLines[0].items.length, 4);
   });
 
-  test('submitting stores the overspill policy', async (t) => {
+  test('submitting sends it for signature and stores the overspill policy', async (t) => {
     if (!live) return t.skip('no database');
     const r = await api(`/boq/${S.boqId}/submit`, { method: 'POST', body: { overAllow: true, overPct: 10 } });
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.policy, { overAllow: true, overPct: 10 });
+    // submitting no longer locks it: the BOQ is what every indent on
+    // this site is measured against, so it is signed twice first
+    assert.equal(r.body.status, 'SUBMITTED');
+  });
+
+  test('a BOQ locks on the second signature, not the first', async (t) => {
+    if (!live) return t.skip('no database');
+    const first = await signOnce(api, `/boq/${S.boqId}/decide`);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.done, false, 'one signature is not enough');
+    assert.equal(first.body.status, 'SUBMITTED');
+
+    // and the person who signed first may not sign again
+    const twice = await as(api, GM)(`/boq/${S.boqId}/decide`,
+      { method: 'POST', body: { action: 'APPROVED' } });
+    assert.equal(twice.status, 409, 'the same person cannot be both levels');
+
+    const second = await as(api, MANAGEMENT)(`/boq/${S.boqId}/decide`,
+      { method: 'POST', body: { action: 'APPROVED' } });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.done, true);
+    assert.equal(second.body.status, 'LOCKED');
   });
 
   test('a draft indent holds no quantity', async (t) => {
@@ -339,7 +362,10 @@ describe('planning and site', () => {
 
   test('returning an indent makes it editable again', async (t) => {
     if (!live) return t.skip('no database');
-    const r = await api(`/indents/${S.indentId}/decide`, { method: 'POST', body: {
+    // either level may send it back, and it goes all the way back —
+    // a second signature is not held in reserve for a document that
+    // is being changed
+    const r = await as(api, GM)(`/indents/${S.indentId}/decide`, { method: 'POST', body: {
       action: 'RETURNED', note: 'split it across two weeks' } });
     assert.equal(r.body.status, 'RETURNED');
     const ind = (await api(`/indents/${S.indentId}`)).body;
@@ -398,7 +424,7 @@ describe('planning and site', () => {
       lines: [{ boqLineId: pair[0].boq_line_id, qty: 6 },
         { boqLineId: pair[1].boq_line_id, qty: 4 }] } });
     await api(`/indents/${S.indentId}/submit`, { method: 'POST' });
-    await api(`/indents/${S.indentId}/decide`, { method: 'POST', body: { action: 'APPROVED' } });
+    await signOff(api, `/indents/${S.indentId}/decide`);
 
     const ind = (await api(`/indents/${S.indentId}`)).body;
     assert.equal(ind.status, 'APPROVED');
