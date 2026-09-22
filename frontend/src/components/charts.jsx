@@ -245,8 +245,10 @@ export function RankBars({
               </span>
               <span className="mono" style={{ fontWeight: 700 }}>{format(v)}</span>
             </div>
+            {/* the empty part of the track is scenery, not a value —
+                it has to sit well below the bar it carries */}
             <div style={{
-              height: 7, borderRadius: 4, background: 'var(--faint)', overflow: 'hidden',
+              height: 7, borderRadius: 4, background: 'var(--line-2)', overflow: 'hidden',
             }}>
               <i style={{
                 display: 'block', height: '100%',
@@ -272,7 +274,7 @@ export function SplitBar({ parts, total }) {
     <div style={{ display: 'grid', gap: 6 }}>
       <div style={{
         display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden',
-        background: 'var(--faint)',
+        background: 'var(--line-2)',
       }}>
         {parts.map((p) => (
           <i key={p.label} title={`${p.label} — ${money(p.value)}`}
@@ -955,13 +957,75 @@ export function HeatStrip({ series, lines, bucket = 'week', format = (v) => v })
 
 /* ---------------------------------------------------------- treemap
    Which are the big ones, when there are twenty of them and a bar
-   chart would need a screen of its own. Squarified enough to compare
-   areas; the figure is printed on any tile with room for it.
+   chart would need a screen of its own.
+
+   Laid out by squarify: the classic algorithm, which fills the
+   rectangle by keeping each row's tiles as close to square as it can.
+   The naive version — take a row, move down, repeat — leaves slivers
+   along the bottom that are impossible to compare and look like a
+   rendering fault, which is exactly what it did here first.
    =================================================================== */
+
+/** The worst aspect ratio in a row, which is what squarify minimises. */
+function worstRatio(row, side) {
+  const sum = row.reduce((a, b) => a + b, 0);
+  if (!sum || !side) return Infinity;
+  const max = Math.max(...row);
+  const min = Math.min(...row);
+  return Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min));
+}
+
+/** Areas, in pixels squared, packed into a rectangle. */
+function squarify(areas, rect) {
+  const out = [];
+  let { x, y, w, h } = rect;
+  const left = [...areas];
+  let row = [];
+
+  const place = () => {
+    const sum = row.reduce((a, b) => a + b.area, 0);
+    if (w >= h) {
+      const rw = sum / h;
+      let cy = y;
+      row.forEach((it) => {
+        const ih = it.area / rw;
+        out.push({ ...it, x, y: cy, w: rw, h: ih });
+        cy += ih;
+      });
+      x += rw;
+      w -= rw;
+    } else {
+      const rh = sum / w;
+      let cx = x;
+      row.forEach((it) => {
+        const iw = it.area / rh;
+        out.push({ ...it, x: cx, y, w: iw, h: rh });
+        cx += iw;
+      });
+      y += rh;
+      h -= rh;
+    }
+    row = [];
+  };
+
+  while (left.length) {
+    const side = Math.min(w, h);
+    const next = left[0];
+    const cur = row.map((r) => r.area);
+    if (!row.length || worstRatio([...cur, next.area], side) <= worstRatio(cur, side)) {
+      row.push(left.shift());
+    } else {
+      place();
+    }
+  }
+  if (row.length) place();
+  return out;
+}
+
 export function Treemap({ rows, labelKey = 'label', valueKey = 'value', height = 230, format = money }) {
   const [hover, setHover] = useState(null);
   const clean = (rows || [])
-    .map((r) => ({ label: r[labelKey], value: Math.abs(Number(r[valueKey]) || 0) }))
+    .map((r) => ({ label: String(r[labelKey] ?? ''), value: Math.abs(Number(r[valueKey]) || 0) }))
     .filter((r) => r.value > 0)
     .sort((a, b) => b.value - a.value)
     .slice(0, 12);
@@ -970,62 +1034,39 @@ export function Treemap({ rows, labelKey = 'label', valueKey = 'value', height =
   const W = 720;
   const H = height;
   const total = clean.reduce((t, r) => t + r.value, 0);
-
-  // slice-and-dice in rows: take items until the row is roughly square
-  const tiles = [];
-  let idx = 0;
-  let y = 0;
-  while (idx < clean.length && y < H - 1) {
-    const remaining = clean.slice(idx);
-    const remTotal = remaining.reduce((t, r) => t + r.value, 0);
-    const remH = H - y;
-    // how many go in this row: enough that the row is about as tall as
-    // the tiles in it are wide
-    let take = 1;
-    let rowVal = remaining[0].value;
-    while (idx + take < clean.length) {
-      const nextVal = rowVal + remaining[take].value;
-      const rowH = (nextVal / remTotal) * remH;
-      const avgW = W / (take + 1);
-      if (Math.abs(rowH - avgW) > Math.abs((rowVal / remTotal) * remH - W / take)) break;
-      rowVal = nextVal;
-      take += 1;
-    }
-    const rowH = Math.min(remH, (rowVal / remTotal) * remH);
-    let x = 0;
-    remaining.slice(0, take).forEach((r, i) => {
-      const tw = (r.value / rowVal) * W;
-      tiles.push({ ...r, x, y, w: tw, h: rowH, tone: RAMP[(tiles.length) % RAMP.length] });
-      x += tw;
-    });
-    y += rowH;
-    idx += take;
-  }
+  const scale = (W * H) / total;
+  const tiles = squarify(
+    clean.map((r, i) => ({ ...r, area: r.value * scale, tone: RAMP[i % RAMP.length] })),
+    { x: 0, y: 0, w: W, h: H },
+  );
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img"
-      style={{ display: 'block' }} onMouseLeave={() => setHover(null)}>
+      aria-label="share by size" style={{ display: 'block' }}
+      onMouseLeave={() => setHover(null)}>
       {tiles.map((t, i) => (
         <g key={t.label} onMouseEnter={() => setHover(i)}
           opacity={hover === null || hover === i ? 1 : 0.55}>
+          <title>{`${t.label}: ${format(t.value)}`}</title>
           <rect x={t.x + 1.5} y={t.y + 1.5} width={Math.max(0, t.w - 3)} height={Math.max(0, t.h - 3)}
             rx="6" fill={hue(t.tone)} />
-          {t.w > 76 && t.h > 34 && (
-            <>
-              <text x={t.x + 11} y={t.y + 21} fontSize="12" fill="#fff" fontWeight="600">
-                {t.label.length > t.w / 7.2 ? `${t.label.slice(0, Math.floor(t.w / 7.2))}…` : t.label}
-              </text>
-              <text x={t.x + 11} y={t.y + 38} fontSize="12" fill="#fff" opacity=".85"
-                fontFamily="var(--font-display)">
-                {format(t.value)} · {Math.round((t.value / total) * 100)}%
-              </text>
-            </>
+          {t.w > 82 && t.h > 32 && (
+            <text x={t.x + 11} y={t.y + 20} fontSize="12" fill="#fff" fontWeight="600">
+              {t.label.length > t.w / 7.2
+                ? `${t.label.slice(0, Math.floor(t.w / 7.2))}…` : t.label}
+            </text>
+          )}
+          {t.w > 82 && t.h > 50 && (
+            <text x={t.x + 11} y={t.y + 37} fontSize="12" fill="#fff" opacity=".88"
+              fontFamily="var(--font-display)">
+              {format(t.value)}{' · '}{Math.round((t.value / total) * 100)}%
+            </text>
           )}
         </g>
       ))}
-      {hover !== null && tiles[hover].w <= 76 && (
-        <text x={8} y={H - 8} fontSize="12" fill="var(--ink)">
-          {tiles[hover].label} · {format(tiles[hover].value)}
+      {hover !== null && tiles[hover].w <= 82 && (
+        <text x={10} y={H - 10} fontSize="12" fill="var(--ink)" fontWeight="600">
+          {tiles[hover].label}{' · '}{format(tiles[hover].value)}
         </text>
       )}
     </svg>
@@ -1110,6 +1151,164 @@ export function Histogram({ values, bins = 8, height = 150, tone = 'bad', unit =
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+
+/* ===================================================================
+   The margin bridge.
+
+   A profit and loss read as two totals tells you the answer and
+   nothing about how it was arrived at. The bridge starts at what was
+   billed, knocks off each kind of cost as its own step, and lands on
+   what is left — so the reader sees which cost did the damage rather
+   than inferring it from a pie.
+
+   Every bar is drawn from the running total the one before it left,
+   with a dashed tie between them; only the first and last touch zero,
+   because they are totals and the rest are movements.
+   =================================================================== */
+export function Waterfall({ steps, height = 260, format = money, axis = shortMoney }) {
+  const [hover, setHover] = useState(null);
+  const list = (steps || []).filter(Boolean);
+  if (!list.length) return <div className="empty"><b>Nothing to bridge</b></div>;
+
+  const w = 720;
+  const h = height;
+  const pad = { t: 26, r: 14, b: 44, l: 62 };
+  const iw = w - pad.l - pad.r;
+  const ih = h - pad.t - pad.b;
+
+  // walk it once to find how high the running total ever gets
+  let run = 0;
+  let peak = 0;
+  let floor = 0;
+  const walked = list.map((st) => {
+    if (st.total) {
+      peak = Math.max(peak, run);
+      return { ...st, from: 0, to: run, isTotal: true };
+    }
+    const from = run;
+    run += Number(st.value) || 0;
+    peak = Math.max(peak, from, run);
+    floor = Math.min(floor, run);
+    return { ...st, from, to: run, isTotal: false };
+  });
+
+  const top = niceMax(peak) || 1;
+  const bottom = floor < 0 ? -niceMax(Math.abs(floor)) : 0;
+  const span = top - bottom || 1;
+  const y = (v) => pad.t + ih - ((v - bottom) / span) * ih;
+  const band = iw / walked.length;
+  const bw = Math.min(64, band - 22);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => bottom + span * f);
+
+  return (
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} role="img"
+        aria-label="margin bridge" style={{ display: 'block', minWidth: 460 }}
+        onMouseLeave={() => setHover(null)}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={pad.l} x2={w - pad.r} y1={y(t)} y2={y(t)} stroke="var(--line)"
+              strokeDasharray={Math.abs(t) < 0.001 ? '' : '3 4'} />
+            <text x={pad.l - 8} y={y(t) + 4} textAnchor="end" fontSize="10"
+              fill="var(--muted)">{axis(t)}</text>
+          </g>
+        ))}
+
+        {walked.map((st, i) => {
+          const x = pad.l + band * i + band / 2 - bw / 2;
+          const yTop = y(Math.max(st.from, st.to));
+          const hBar = Math.max(2, Math.abs(y(st.from) - y(st.to)));
+          const down = st.to < st.from;
+          const tone = st.isTotal
+            ? (st.to >= 0 ? 'ok' : 'bad')
+            : down ? 'bad' : (st.tone || 'brand');
+          return (
+            <g key={st.label} onMouseEnter={() => setHover(i)}
+              opacity={hover === null || hover === i ? 1 : 0.55}>
+              <rect x={x} y={yTop} width={bw} height={hBar} rx="5"
+                fill={st.isTotal ? hue(tone) : hue(tone)}
+                opacity={st.isTotal ? 1 : 0.92} />
+              <text x={x + bw / 2} y={yTop - 7} textAnchor="middle" fontSize="11"
+                fontWeight="700" fill="var(--ink)" fontFamily="var(--font-display)">
+                {st.isTotal || st.value >= 0
+                  ? format(st.isTotal ? st.to : st.value)
+                  : `\u2212${format(Math.abs(st.value))}`}
+              </text>
+              <text x={x + bw / 2} y={h - 24} textAnchor="middle" fontSize="11"
+                fill="var(--ink-2)" fontWeight={st.isTotal ? 700 : 500}>
+                {st.label.length > 15 ? `${st.label.slice(0, 14)}…` : st.label}
+              </text>
+              {st.note && (
+                <text x={x + bw / 2} y={h - 10} textAnchor="middle" fontSize="10"
+                  fill="var(--muted)">{st.note}</text>
+              )}
+              {/* the tie to the next bar: where this step left the total */}
+              {i < walked.length - 1 && !st.isTotal && (
+                <line x1={x + bw} x2={pad.l + band * (i + 1) + band / 2 - bw / 2}
+                  y1={y(st.to)} y2={y(st.to)} stroke="var(--faint)" strokeDasharray="3 3" />
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+/* ===================================================================
+   Diverging bars — one row per thing, above or below a centre line.
+
+   For a figure that is meaningfully negative: profit by site, a rate
+   against an estimate. A ranked bar chart cannot show a loss without
+   either dropping the sign or drawing it the same length as a gain,
+   and both of those hide the thing the reader came for.
+   =================================================================== */
+export function DivergingBars({ rows, format = money, max = 12, height = 26 }) {
+  const list = (rows || []).slice(0, max);
+  if (!list.length) return <div className="empty"><b>Nothing to compare</b></div>;
+  const peak = Math.max(...list.map((r) => Math.abs(Number(r.value) || 0)), 1);
+
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {list.map((r) => {
+        const v = Number(r.value) || 0;
+        const pct = (Math.abs(v) / peak) * 50;
+        const up = v >= 0;
+        return (
+          <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              width: 150, fontSize: 12.5, textAlign: 'right', flex: '0 0 auto',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              color: 'var(--ink-2)',
+            }} title={r.label}>{r.label}</span>
+            <div style={{ flex: 1, position: 'relative', height }}>
+              <span style={{
+                position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1,
+                background: 'var(--line)',
+              }} />
+              <span style={{
+                position: 'absolute', top: 3, bottom: 3,
+                left: up ? '50%' : `${50 - pct}%`, width: `${Math.max(pct, 0.6)}%`,
+                background: up ? hue(r.tone || 'ok') : 'var(--bad)',
+                borderRadius: up ? '0 5px 5px 0' : '5px 0 0 5px',
+              }} />
+            </div>
+            <span className="mono" style={{
+              width: 110, fontSize: 12.5, fontWeight: 700, flex: '0 0 auto',
+              color: up ? 'var(--ink)' : 'var(--bad)',
+            }}>{format(v)}</span>
+            {r.note != null && (
+              <span style={{ width: 62, fontSize: 12, color: 'var(--muted)', flex: '0 0 auto' }}>
+                {r.note}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

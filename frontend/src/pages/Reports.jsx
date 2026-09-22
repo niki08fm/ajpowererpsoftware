@@ -1,12 +1,15 @@
-import { Fragment } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { qty, money, dmy, today, addDays } from '../api';
+import { qty, money, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field,
 } from '../components/ui';
-import { TrendChart, RankBars, DonutChart, LineChart } from '../components/charts';
+import {
+  TrendChart, RankBars, DonutChart, LineChart, StackedBars, HeatStrip, Treemap,
+  Waterfall, DivergingBars, Gauge, Bullet, Sparkline,
+} from '../components/charts';
 
 /**
  * What it has cost, and what it has earned.
@@ -41,7 +44,7 @@ function useFilters(initial) {
 /** Site or all sites, and a window. Both reports want exactly this. */
 function Filters({ f, set, children, dates = true }) {
   const { branchId } = useApp();
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const preset = (days) => set({ from: addDays(today(), -days), to: today() });
   const fy = () => {
     const n = new Date();
@@ -109,7 +112,9 @@ function Filters({ f, set, children, dates = true }) {
    =================================================================== */
 
 const Row = ({ label, amount, strong, tone, sub }) => (
-  <tr style={strong ? { background: 'var(--faint)' } : undefined}>
+  // a subtotal is shaded, not blacked out — the old --faint was a pale
+  // slate and is now a mid grey, which turned every total into a slab
+  <tr style={strong ? { background: 'var(--line-2)' } : undefined}>
     <td colSpan={6} style={{ textAlign: 'right', paddingRight: 14 }}>
       {strong ? <b>{label}</b> : label}
       {sub && <div style={{ color: 'var(--muted)', fontSize: 11 }}>{sub}</div>}
@@ -216,12 +221,54 @@ function ClaimRows({ rows, showSite }) {
   ));
 }
 
+/* ===================================================================
+   THE EXPENSE REPORT — the analysis, then the statement
+   ===================================================================
+   It opens on what the money did rather than on eleven hundred rows.
+
+   The order is the order somebody asks the questions in: how much,
+   then what on, then which items and which sites, then when — and the
+   statement itself, which is the document people print and argue
+   over, waits at the bottom until it is asked for.
+
+   The statement has not changed a line. It is the same cost statement
+   as before, folded rather than removed, because a cost statement is
+   a legal artefact and the charts are a way of looking at it.
+   =================================================================== */
+
+/** A figure with its share of the total, and its own shape. */
+const Kpi = ({ cap, value, foot, tone, share, spark, sparkTone }) => (
+  <div className={`ov-tile ${tone || ''}`}>
+    <span className="ribbon" />
+    <span className="cap">{cap}</span>
+    <div className="fig"><b className="num">{value}</b></div>
+    {foot && <div className="foot">{foot}</div>}
+    {share != null && (
+      <div className="meter" aria-hidden="true"><i style={{ width: `${share}%` }} /></div>
+    )}
+    {spark && spark.length > 1 && (
+      <Sparkline values={spark} tone={sparkTone || 'brand'} width={150} height={28} />
+    )}
+  </div>
+);
+
+const Panel = ({ title, sub, aside, children, pad = true }) => (
+  <div className="card">
+    <header>
+      <div><h3>{title}</h3>{sub && <p>{sub}</p>}</div>
+      <div className="sp" />
+      {aside}
+    </header>
+    <div className={pad ? 'pad' : ''}>{children}</div>
+  </div>
+);
+
 export function ExpenseReport() {
   const { branchId } = useApp();
   const [f, set] = useFilters({
-    site: '', from: '', to: '', bucket: 'month', source: 'ALL', view: 'table',
+    site: '', from: '', to: '', bucket: 'month', source: 'ALL',
   });
-  const charts = f.view === 'charts';
+  const [shape, setShape] = useState('stacked');
 
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}),
@@ -232,10 +279,49 @@ export function ExpenseReport() {
     bucket: f.bucket,
   }).toString();
 
-  const st = useApi(branchId ? `/costs/expense/statement?${qs}` : null, [qs]);
-  const ch = useApi(charts && branchId ? `/costs/expense?${qs}` : null, [qs, charts]);
+  const st = useApi(`/costs/expense/statement?${qs}`, [qs]);
+  const ch = useApi(`/costs/expense?${qs}`, [qs]);
   const d = st.data;
+  const a = ch.data;
   const showSite = !f.site;
+
+  const view = useMemo(() => {
+    if (!d) return null;
+    const t = d.totals;
+    const total = Number(t.total) || 0;
+    const pct = (v) => (total > 0 ? (Number(v) / total) * 100 : 0);
+    const series = a?.series || [];
+    // the expense categories on their own: "cable" and "transport" are
+    // not comparable, so material stays out of this ranking
+    const cats = (a?.byCategory || []).filter((c) => c.source === 'EXPENSE');
+    const spend = series.map((s) => Number(s.total) || 0);
+    const busiest = series.reduce((best, s) =>
+      (Number(s.total) > Number(best?.total || -1) ? s : best), null);
+    // the counts are on the analysis payload; the statement carries
+    // the money only, and printing "undefined entries" is worse than
+    // printing nothing
+    return {
+      t,
+      total,
+      pct,
+      series,
+      cats,
+      spend,
+      busiest,
+      entries: Number(a?.totals?.entries) || 0,
+      sites: Number(a?.totals?.sites) || 0,
+      // a donut of one slice is a circle: it says 100% of something we
+      // already printed above it, and nothing about a mix
+      mix: [
+        { label: 'Material', value: Number(t.material) || 0, tone: 'brand' },
+        { label: 'Labour', value: Number(t.labour) || 0, tone: 'warn' },
+        { label: 'Other expenses', value: Number(t.other) || 0, tone: 'ok' },
+      ].filter((x) => x.value > 0),
+      avg: spend.length ? spend.reduce((x, y) => x + y, 0) / spend.length : 0,
+      quiet: !spend.some((v) => v),
+      multiSite: (a?.bySite || []).length > 1,
+    };
+  }, [d, a]);
 
   const grab = () => {
     const window = f.from || f.to
@@ -249,7 +335,7 @@ export function ExpenseReport() {
       [],
       ['Material is priced at what the central store held each item at on the day it moved,'],
       ['so an item that moved on several days has no single rate. The amount is the sum of'],
-      ['each day at that day\u2019s price.'],
+      ['each day at that day’s price.'],
       [],
       ['MATERIAL CONSUMED'],
       ['Code', 'Item', 'Unit', 'Consumed', 'Amount'],
@@ -297,18 +383,10 @@ export function ExpenseReport() {
   return (
     <>
       <PageHead title="Expense report"
-        sub="Material consumed, labour, and every other approved expense"
-        actions={
-          <div style={{ display: 'flex', gap: 9 }}>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <button className={`btn ${!charts ? 'pri' : ''}`}
-                onClick={() => set({ view: 'table' })}>Statement</button>
-              <button className={`btn ${charts ? 'pri' : ''}`}
-                onClick={() => set({ view: 'charts' })}>Charts</button>
-            </div>
-            <button className="btn" onClick={grab} disabled={!d}>Download</button>
-          </div>
-        } />
+        sub={d?.site
+          ? `${d.site.name} — material consumed, labour, and every other approved expense`
+          : 'Material consumed, labour, and every other approved expense'}
+        actions={<button className="btn" onClick={grab} disabled={!d}>Download</button>} />
 
       <div className="page-body">
         {st.error && <ErrorNote error={st.error} onRetry={st.reload} />}
@@ -322,37 +400,176 @@ export function ExpenseReport() {
               <option value="EXPENSE">Expenses only</option>
             </select>
           </Field>
-          {charts && (
-            <Field label="Group by">
-              <select className="inp" style={{ width: 110 }} value={f.bucket}
-                onChange={(e) => set({ bucket: e.target.value })}>
-                <option value="day">Day</option>
-                <option value="week">Week</option>
-                <option value="month">Month</option>
-              </select>
-            </Field>
-          )}
+          <Field label="Group by">
+            <select className="inp" style={{ width: 110 }} value={f.bucket}
+              onChange={(e) => set({ bucket: e.target.value })}>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          </Field>
         </Filters>
 
         {st.loading || !d ? <Loading /> : (
           <>
-            <div className="stats">
-              <Stat n={money(d.totals.material)} label="material consumed" />
-              <Stat n={money(d.totals.labour)} label="labour" />
-              <Stat n={money(d.totals.other)} label="other expenses" />
-              <Stat n={money(d.totals.total)} label="total" tone="brand" />
-              {Number(d.totals.beforeWindow) > 0 && (
-                <Stat n={money(d.totals.toDate)} label="to date" />
+            {a?.pending?.claims > 0 && (
+              <Banner kind="warn" icon="…"
+                action={<Link className="btn sm" to="/site/expenses?status=WAITING">Decide them</Link>}>
+                <b>{money(a.pending.amount)}</b> across {a.pending.claims} claim
+                {a.pending.claims === 1 ? '' : 's'} is waiting to be approved and is in none of
+                these figures.
+              </Banner>
+            )}
+
+            {/* ---- 1. how much ------------------------------------- */}
+            <div className="ov-grid">
+              <Kpi cap="Total cost" value={money(view.total)}
+                foot={f.from
+                  ? `${dmy(f.from)} to ${f.to ? dmy(f.to) : dmy(today())}`
+                  : view.entries
+                    ? `${view.entries} entries across ${view.sites} site${view.sites === 1 ? '' : 's'}`
+                    : 'all time'}
+                spark={view.spend} />
+              <Kpi cap="Material consumed" value={money(view.t.material)}
+                foot={`${Math.round(view.pct(view.t.material))}% of the total`}
+                share={view.pct(view.t.material)} />
+              <Kpi cap="Labour" value={money(view.t.labour)}
+                foot={`${Math.round(view.pct(view.t.labour))}% of the total`}
+                share={view.pct(view.t.labour)} />
+              <Kpi cap="Other expenses" value={money(view.t.other)}
+                foot={`${Math.round(view.pct(view.t.other))}% of the total`}
+                share={view.pct(view.t.other)} />
+              {Number(view.t.beforeWindow) > 0 && (
+                <Kpi cap="Total to date" value={money(view.t.toDate)}
+                  foot={`${money(view.t.beforeWindow)} of it before this window`} />
               )}
             </div>
 
-            {charts ? (
-              ch.error ? <ErrorNote error={ch.error} onRetry={ch.reload} />
-                : ch.loading || !ch.data ? <Loading />
-                  : <ChartView data={ch.data} bucket={f.bucket} totals={d.totals} />
-            ) : (
-              <Statement d={d} showSite={showSite} f={f} />
-            )}
+            {/* ---- 2. what on -------------------------------------- */}
+            <div className="ov-row two">
+              <Panel title="What the money went on"
+                sub="material against labour against everything else">
+                {view.mix.length > 1 ? (
+                  <DonutChart centreLabel="total cost" parts={view.mix} />
+                ) : view.mix.length === 1 ? (
+                  <div style={{ padding: '18px 4px' }}>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.6, marginBottom: 14 }}>
+                      Every rupee in this window was <b>{view.mix[0].label.toLowerCase()}</b> —{' '}
+                      <b className="mono">{money(view.total)}</b> of it. There is no mix to
+                      split while the other two are nil.
+                    </div>
+                    <Bullet rows={[
+                      { label: 'Material', value: view.t.material, target: view.total, tone: 'brand' },
+                      { label: 'Labour', value: view.t.labour, target: view.total, tone: 'warn' },
+                      { label: 'Other expenses', value: view.t.other, target: view.total, tone: 'ok' },
+                    ]} format={money} />
+                  </div>
+                ) : <Empty title="Nothing spent in this window" />}
+              </Panel>
+
+              <Panel title="Expenses by kind"
+                sub="approved claims, material set aside">
+                {view.cats.length ? (
+                  <RankBars rows={view.cats} labelKey="category" valueKey="amount" max={8} />
+                ) : (
+                  <Empty title="No approved expenses in this window">
+                    Claims count here once somebody approves them.
+                  </Empty>
+                )}
+              </Panel>
+            </div>
+
+            {/* ---- 3. when ----------------------------------------- */}
+            <div className="ov-row">
+              <Panel title={`Spending by ${f.bucket}`}
+                sub={view.busiest
+                  ? `busiest ${f.bucket}: ${dmy(view.busiest.bucket)} at ${money(view.busiest.total)}`
+                  : 'material and expenses, period by period'}
+                aside={
+                  <div className="seg" role="group" aria-label="chart shape">
+                    {[['stacked', 'Stacked'], ['running', 'To date'], ['heat', 'Heat']].map(([k, l]) => (
+                      <button key={k} type="button" className={shape === k ? 'on' : ''}
+                        onClick={() => setShape(k)}>{l}</button>
+                    ))}
+                  </div>
+                }>
+                {ch.loading && !a ? <Loading />
+                  : view.quiet ? (
+                    <Empty title="Nothing in this window">
+                      Widen the dates, or clear a filter.
+                    </Empty>
+                  ) : shape === 'heat' ? (
+                    <HeatStrip series={view.series} bucket={f.bucket} format={money} lines={[
+                      { key: 'material', label: 'Material', tone: 'brand' },
+                      { key: 'expense', label: 'Expenses', tone: 'warn' },
+                      { key: 'total', label: 'Total', tone: 'ok' },
+                    ]} />
+                  ) : shape === 'running' ? (
+                    <TrendChart series={view.series} bucket={f.bucket}
+                      valueKey="total" runningKey="running_value" label="cost" />
+                  ) : (
+                    <StackedBars series={view.series} bucket={f.bucket} height={250} stacked
+                      lines={[
+                        { key: 'material', label: 'Material', tone: 'brand' },
+                        { key: 'expense', label: 'Expenses', tone: 'warn' },
+                      ]} />
+                  )}
+                <div style={{
+                  marginTop: 12, display: 'flex', gap: 22, flexWrap: 'wrap',
+                  fontSize: 12.5, color: 'var(--muted)',
+                }}>
+                  <span>Average per {f.bucket} <b className="mono" style={{ color: 'var(--ink)' }}>
+                    {money(view.avg)}</b></span>
+                  {view.busiest && (
+                    <span>Heaviest <b className="mono" style={{ color: 'var(--ink)' }}>
+                      {money(view.busiest.total)}</b></span>
+                  )}
+                  <span>Periods <b className="mono" style={{ color: 'var(--ink)' }}>
+                    {view.series.length}</b></span>
+                </div>
+              </Panel>
+            </div>
+
+            {/* ---- 4. which items, which sites --------------------- */}
+            <div className="ov-row two">
+              <Panel title="Where the material went"
+                sub="area is the share of the material bill" pad={false}>
+                <div style={{ padding: '10px 14px 14px' }}>
+                  {a?.byItem?.length
+                    ? <Treemap rows={a.byItem} labelKey="item_name" valueKey="amount" height={230} />
+                    : <Empty title="No material consumed in this window" />}
+                </div>
+              </Panel>
+
+              <Panel title={view.multiSite ? 'By site' : 'Dearest material'}
+                sub={view.multiSite
+                  ? 'which sites are carrying the cost'
+                  : 'net of anything returned'}>
+                {view.multiSite
+                  ? <RankBars rows={a.bySite} labelKey="site_name" valueKey="total" max={10} />
+                  : a?.byItem?.length
+                    ? <RankBars rows={a.byItem} labelKey="item_name" valueKey="amount"
+                      subKey="qty" max={8} />
+                    : <Empty title="Nothing to rank" />}
+              </Panel>
+            </div>
+
+            {/* ---- 5. the statement, on request -------------------- */}
+            <details className="fold">
+              <summary>
+                <span className="mark" aria-hidden="true">{'▶'}</span>
+                <div>
+                  <h3>The cost statement</h3>
+                  <p>
+                    Every line behind these figures — material item by item, then labour,
+                    then everything else
+                  </p>
+                </div>
+                <div className="sp" />
+                <span className="tag brand">{money(view.total)}</span>
+              </summary>
+              <Statement d={d} showSite={showSite} f={f} bare />
+            </details>
           </>
         )}
       </div>
@@ -361,12 +578,21 @@ export function ExpenseReport() {
 }
 
 /* --------------------------------------------------- the statement */
-function Statement({ d, showSite, f }) {
+function Statement({ d, showSite, f, bare }) {
+  // inside the fold it is already in a card; a card in a card is a
+  // border for the sake of a border
+  const Wrap = bare
+    ? ({ children }) => <>{children}</>
+    : ({ children }) => (
+      <Card title={d.site ? `${d.site.name} — cost statement` : 'Cost statement — every site'}
+        sub={d.site?.client_name
+          ? `${d.site.client_name}${f.from ? ` · from ${dmy(f.from)}` : ''}`
+          : f.from ? `From ${dmy(f.from)}${f.to ? ` to ${dmy(f.to)}` : ''}` : 'All time'}>
+        {children}
+      </Card>
+    );
   return (
-    <Card title={d.site ? `${d.site.name} — cost statement` : 'Cost statement — every site'}
-      sub={d.site?.client_name
-        ? `${d.site.client_name}${f.from ? ` · from ${dmy(f.from)}` : ''}`
-        : f.from ? `From ${dmy(f.from)}${f.to ? ` to ${dmy(f.to)}` : ''}` : 'All time'}>
+    <Wrap>
       <div className="tw">
         <table>
           <tbody>
@@ -444,84 +670,7 @@ function Statement({ d, showSite, f }) {
           </tbody>
         </table>
       </div>
-    </Card>
-  );
-}
-
-/* ------------------------------------------------------ the charts */
-function ChartView({ data, bucket, totals }) {
-  const expenseCats = (data.byCategory || []).filter((c) => c.source === 'EXPENSE');
-
-  return (
-    <>
-      {data.pending.claims > 0 && (
-        <Banner kind="warn" icon="…"
-          action={<Link className="btn sm" to="/site/expenses?status=WAITING">Decide them</Link>}>
-          <b>{money(data.pending.amount)}</b> across {data.pending.claims} claim
-          {data.pending.claims === 1 ? '' : 's'} is waiting to be approved and is in none of
-          these figures.
-        </Banner>
-      )}
-
-      <div className="grid2">
-        <Card title="What the money went on" sub="Material against labour against the rest">
-          <div className="pad">
-            <DonutChart centreLabel="total cost" parts={[
-              { label: 'Material', value: totals.material, tone: 'brand' },
-              { label: 'Labour', value: totals.labour, tone: 'warn' },
-              { label: 'Other expenses', value: totals.other, tone: 'ok' },
-            ]} />
-          </div>
-        </Card>
-        <Card title="Expenses by kind" sub="Approved claims, material set aside">
-          <div className="pad">
-            {expenseCats.length
-              ? <DonutChart centreLabel="expenses"
-                parts={expenseCats.map((c) => ({ label: c.category, value: c.amount }))} />
-              : <Empty title="No approved expenses in this window">
-                Claims count here once somebody approves them.
-              </Empty>}
-          </div>
-        </Card>
-      </div>
-
-      <Card title="How it has run"
-        sub={`By ${bucket} — material and expenses moving against each other`}>
-        <div className="pad">
-          <LineChart series={data.series} bucket={bucket} lines={[
-            { key: 'total', label: 'Total', tone: 'brand' },
-            { key: 'material', label: 'Material', tone: 'navy' },
-            { key: 'expense', label: 'Expenses', tone: 'warn' },
-          ]} />
-        </div>
-      </Card>
-
-      <Card title="Cost to date" sub="The running total, period by period">
-        <div className="pad">
-          <TrendChart series={data.series} bucket={bucket}
-            valueKey="total" runningKey="running_value" label="cost" />
-        </div>
-      </Card>
-
-      <div className="grid2">
-        <Card title="By site" sub="Where the money went">
-          <div className="pad">
-            {data.bySite.length > 1
-              ? <DonutChart centreLabel="total"
-                parts={data.bySite.map((x) => ({ label: x.site_name, value: x.total }))} />
-              : <RankBars rows={data.bySite} labelKey="site_name" valueKey="total" />}
-          </div>
-        </Card>
-        <Card title="Dearest material" sub="Net of anything returned">
-          <div className="pad">
-            {data.byItem.length
-              ? <RankBars rows={data.byItem} labelKey="item_name" valueKey="amount"
-                subKey="qty" max={10} />
-              : <Empty title="No material consumed in this window" />}
-          </div>
-        </Card>
-      </div>
-    </>
+    </Wrap>
   );
 }
 
@@ -536,18 +685,58 @@ function ChartView({ data, bucket, totals }) {
    way through to the expense report, because showing a cost figure
    under a heading that reads "profit and loss" invites somebody to
    read it as a loss.
+
+   The screen answers three questions in order. What is left, as a
+   bridge from billed down to margin — so the reader sees which cost
+   did the damage rather than guessing at it from a pie. Whether it is
+   getting better or worse, as the two figures period by period, with
+   the running pair underneath: cost is spent when material moves and
+   revenue arrives when work is certified, so the two rarely land in
+   the same month and it is where the running lines cross that the
+   work turned profitable. And which sites carry it, as profit above
+   and below a centre line, because a loss drawn the same length as a
+   gain is the one thing a margin chart must never do.
    =================================================================== */
 export function ProfitLoss() {
   const { branchId, branches } = useApp();
-  const [f, set] = useFilters({ site: '' });
-  const { data: sites } = useApi(branchId ? `/sites?branchId=${branchId}` : null, [branchId]);
-  const { data, error, loading, reload } = useApi(
-    branchId ? `/costs/pl?${new URLSearchParams({
-      branchId, ...(f.site ? { siteId: f.site } : {}),
-    })}` : null, [branchId, f.site]);
+  const [f, set] = useFilters({ site: '', from: '', to: '', bucket: 'month' });
+  const [shape, setShape] = useState('period');
+  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
+
+  const qs = new URLSearchParams({
+    ...(branchId ? { branchId } : {}),
+    ...(f.site ? { siteId: f.site } : {}),
+    ...(f.from ? { from: f.from } : {}),
+    ...(f.to ? { to: f.to } : {}),
+    bucket: f.bucket,
+  }).toString();
+  const { data, error, loading, reload } = useApi(`/costs/pl?${qs}`, [qs]);
 
   const site = (sites || []).find((x) => String(x.id) === String(f.site));
   const branch = (branches || []).find((b) => b.id === branchId);
+
+  const view = useMemo(() => {
+    if (!data?.available) return null;
+    const series = data.series || [];
+    const profitable = series.filter((s) => Number(s.profit) > 0).length;
+    // where the running lines cross: the period the work paid for itself
+    const turned = series.find((s) => Number(s.running_profit) > 0);
+    const billedPct = data.orderValue > 0
+      ? (data.revenue.total / data.orderValue) * 100 : 0;
+    return {
+      series,
+      profitable,
+      turned,
+      billedPct,
+      quiet: !series.some((s) => s.revenue || s.cost),
+      revSpark: series.map((s) => Number(s.revenue) || 0),
+      costSpark: series.map((s) => Number(s.cost) || 0),
+      marginSpark: series.map((s) => Number(s.running_profit) || 0),
+      // only sites that have been billed can show a margin at all
+      billedSites: (data.sites || []).filter((r) => Number(r.bills) > 0),
+      unbilledSites: (data.sites || []).filter((r) => !Number(r.bills) && Number(r.cost) > 0),
+    };
+  }, [data]);
 
   const grab = () => downloadCsv(`profit-and-loss${site ? `-${site.code || site.id}` : ''}`, [
     ['PROFIT AND LOSS'],
@@ -565,6 +754,13 @@ export function ProfitLoss() {
     ['GROSS PROFIT', data.profit.gross],
     ['Margin %', data.profit.marginPct],
     [],
+    ['PERIOD BY PERIOD'],
+    ['Period', 'Revenue', 'Cost', 'Profit', 'Revenue to date', 'Cost to date', 'Profit to date'],
+    ...(data.series || []).map((r) => [
+      r.bucket, r.revenue, r.cost, r.profit,
+      r.running_revenue, r.running_cost, r.running_profit,
+    ]),
+    [],
     ['Site', 'Client', 'Work order', 'Revenue', 'Cost', 'Profit', 'Margin %'],
     ...data.sites.map((r) => [
       r.site_name, r.client_name || '', r.order_value, r.revenue, r.cost, r.profit,
@@ -576,7 +772,8 @@ export function ProfitLoss() {
     <>
       <PageHead title="Profit and loss"
         sub={data?.available
-          ? 'Revenue from raised bills, less what the work cost'
+          ? `${site ? site.name : `Every site in ${branch?.name || 'this branch'}`}`
+            + ' — revenue from raised bills, less what the work cost'
           : 'Nothing has been billed in this scope yet'}
         actions={data?.available
           ? <button className="btn" onClick={grab}>Download</button> : null} />
@@ -584,17 +781,7 @@ export function ProfitLoss() {
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
-        <Card>
-          <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Site">
-              <select className="inp" style={{ width: 260 }} value={f.site}
-                onChange={(e) => set({ site: e.target.value })}>
-                <option value="">Every site in this branch</option>
-                {(sites || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-              </select>
-            </Field>
-          </div>
-        </Card>
+        <Filters f={f} set={set} />
 
         {loading || !data ? <Loading />
           : !data.available ? (
@@ -629,14 +816,29 @@ export function ProfitLoss() {
             </Card>
           ) : (
             <>
-              <div className="stats">
-                <Stat n={money(data.revenue.total)} label="revenue billed" tone="ok" />
-                <Stat n={money(data.cost.total)} label="cost" tone="warn" />
-                <Stat n={money(data.profit.gross)} label="gross profit"
-                  tone={data.profit.gross >= 0 ? 'brand' : 'bad'} />
-                <Stat n={`${data.profit.marginPct}%`} label="margin"
-                  tone={data.profit.marginPct >= 0 ? undefined : 'bad'} />
-                <Stat n={data.revenue.bills} label="bills raised" />
+              {/* ---- the figures --------------------------------- */}
+              <div className="ov-grid">
+                <Kpi cap="Revenue billed" value={money(data.revenue.total)}
+                  foot={`${data.revenue.bills} bill${data.revenue.bills === 1 ? '' : 's'} raised`}
+                  tone="ok" spark={view.revSpark} sparkTone="ok" />
+                <Kpi cap="Cost booked" value={money(data.cost.total)}
+                  foot={`${money(data.cost.material)} material · ${money(data.cost.expense)} claims`}
+                  tone="warn" spark={view.costSpark} sparkTone="warn" />
+                <Kpi cap="Gross profit" value={money(data.profit.gross)}
+                  foot={data.profit.gross >= 0
+                    ? 'revenue less every booked cost'
+                    : 'cost has run ahead of billing'}
+                  tone={data.profit.gross >= 0 ? 'ok' : 'bad'}
+                  spark={view.marginSpark}
+                  sparkTone={data.profit.gross >= 0 ? 'ok' : 'bad'} />
+                <Kpi cap="Margin" value={`${data.profit.marginPct}%`}
+                  foot="of what has been billed"
+                  tone={data.profit.marginPct >= 0 ? '' : 'bad'} />
+                {Number(data.unbilledOrderValue) > 0 && (
+                  <Kpi cap="Order book not billed" value={money(data.unbilledOrderValue)}
+                    foot={`${Math.round(view.billedPct)}% of ${money(data.orderValue)} billed so far`}
+                    share={view.billedPct} />
+                )}
               </div>
 
               {data.profit.gross < 0 && (
@@ -646,6 +848,134 @@ export function ProfitLoss() {
                   certified — but it is worth knowing which it is.
                 </Banner>
               )}
+
+              {/* ---- how it got there ---------------------------- */}
+              <div className="ov-row wide">
+                <Panel title="Margin bridge"
+                  sub="billed, then each cost knocked off it, down to what is left">
+                  <Waterfall steps={[
+                    { label: 'Billed', value: data.revenue.total, tone: 'ok' },
+                    ...(data.cost.material ? [{ label: 'Material', value: -data.cost.material }] : []),
+                    ...(data.cost.labour ? [{ label: 'Labour', value: -data.cost.labour }] : []),
+                    ...(data.cost.other ? [{ label: 'Other', value: -data.cost.other }] : []),
+                    { label: 'Gross profit', value: data.profit.gross, total: true },
+                  ]} />
+                </Panel>
+
+                <Panel title="Margin kept"
+                  sub={`${money(data.profit.gross)} of every ${money(data.revenue.total)} billed`}>
+                  <Gauge value={Math.max(0, data.profit.marginPct)} max={100}
+                    tone={data.profit.marginPct >= 25 ? 'ok'
+                      : data.profit.marginPct >= 0 ? 'warn' : 'bad'}
+                    label="of billed value"
+                    format={() => `${data.profit.marginPct}%`} />
+                  <div style={{ marginTop: 14 }}>
+                    <Bullet
+                      rows={[{
+                        label: 'Billed against the order book',
+                        value: data.revenue.total,
+                        target: data.orderValue,
+                        tone: 'brand',
+                      }]}
+                      format={money} />
+                  </div>
+                </Panel>
+              </div>
+
+              {/* ---- is it getting better ------------------------ */}
+              <div className="ov-row">
+                <Panel title={`Revenue against cost, ${f.bucket} by ${f.bucket}`}
+                  sub={view.turned
+                    ? `in the black from ${dmy(view.turned.bucket)} onward, taken cumulatively`
+                    : 'cost is spent when material moves; revenue arrives when work is certified'}
+                  aside={
+                    <div className="seg" role="group" aria-label="chart shape">
+                      {[['period', 'Each period'], ['running', 'To date'], ['heat', 'Heat']].map(([k, l]) => (
+                        <button key={k} type="button" className={shape === k ? 'on' : ''}
+                          onClick={() => setShape(k)}>{l}</button>
+                      ))}
+                    </div>
+                  }>
+                  {view.quiet ? (
+                    <Empty title="Nothing in this window">
+                      Widen the dates, or clear the site filter.
+                    </Empty>
+                  ) : shape === 'heat' ? (
+                    <HeatStrip series={view.series} bucket={f.bucket} format={money} lines={[
+                      { key: 'revenue', label: 'Billed', tone: 'ok' },
+                      { key: 'cost', label: 'Cost', tone: 'warn' },
+                    ]} />
+                  ) : shape === 'running' ? (
+                    <LineChart series={view.series} bucket={f.bucket} height={260} lines={[
+                      { key: 'running_revenue', label: 'Billed to date', tone: 'ok' },
+                      { key: 'running_cost', label: 'Cost to date', tone: 'warn' },
+                      { key: 'running_profit', label: 'Profit to date', tone: 'brand' },
+                    ]} />
+                  ) : (
+                    <StackedBars series={view.series} bucket={f.bucket} height={260}
+                      stacked={false} lines={[
+                        { key: 'revenue', label: 'Billed', tone: 'ok' },
+                        { key: 'cost', label: 'Cost', tone: 'warn' },
+                      ]} />
+                  )}
+                  <div style={{
+                    marginTop: 12, display: 'flex', gap: 22, flexWrap: 'wrap',
+                    fontSize: 12.5, color: 'var(--muted)',
+                  }}>
+                    <span>Periods in profit <b className="mono" style={{ color: 'var(--ink)' }}>
+                      {view.profitable} of {view.series.length}</b></span>
+                    {data.revenue.firstOn && (
+                      <span>First bill <b className="mono" style={{ color: 'var(--ink)' }}>
+                        {dmy(data.revenue.firstOn)}</b></span>
+                    )}
+                    {data.revenue.lastOn && (
+                      <span>Latest bill <b className="mono" style={{ color: 'var(--ink)' }}>
+                        {dmy(data.revenue.lastOn)}</b></span>
+                    )}
+                  </div>
+                </Panel>
+              </div>
+
+              {/* ---- who carries it ------------------------------ */}
+              <div className="ov-row two">
+                <Panel title="Profit by site"
+                  sub="above the line is kept, below it is spent and not yet billed">
+                  {view.billedSites.length ? (
+                    <DivergingBars
+                      rows={view.billedSites.map((r) => ({
+                        label: r.site_name,
+                        value: Number(r.profit),
+                        note: r.margin_pct == null ? '' : `${r.margin_pct}%`,
+                      }))} />
+                  ) : (
+                    <Empty title="No site has been billed yet" />
+                  )}
+                  {view.unbilledSites.length > 0 && (
+                    <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--muted)' }}>
+                      {view.unbilledSites.length} site
+                      {view.unbilledSites.length === 1 ? '' : 's'} carrying{' '}
+                      <b className="mono" style={{ color: 'var(--ink)' }}>
+                        {money(view.unbilledSites.reduce((t, r) => t + Number(r.cost), 0))}
+                      </b>{' '}
+                      of cost with nothing billed — no margin can be struck for them.{' '}
+                      <Link to="/billing" style={{ color: 'var(--brand-ink)' }}>Bill a site</Link>
+                    </div>
+                  )}
+                </Panel>
+
+                <Panel title="Where the billed rupee went"
+                  sub="cost against what is left of it">
+                  <DonutChart centreLabel="billed" parts={[
+                    { label: 'Material', value: data.cost.material, tone: 'brand' },
+                    { label: 'Labour', value: data.cost.labour, tone: 'warn' },
+                    { label: 'Other expenses', value: data.cost.other, tone: 'cat3' },
+                    ...(data.profit.gross > 0
+                      ? [{ label: 'Gross profit', value: data.profit.gross, tone: 'ok' }]
+                      : []),
+                  ]} />
+                </Panel>
+              </div>
+
               {Number(data.unbilledOrderValue) > 0 && (
                 <Banner kind="info" icon="▸"
                   action={<Link className="btn sm" to="/billing">Bill a site</Link>}>
@@ -654,20 +984,21 @@ export function ProfitLoss() {
                 </Banner>
               )}
 
-              <div className="grid2">
-                <Card title="Where it went" sub="Revenue against what the work cost">
-                  <div className="pad">
-                    <DonutChart centreLabel="cost" parts={[
-                      { label: 'Material', value: data.cost.material, tone: 'brand' },
-                      { label: 'Labour', value: data.cost.labour, tone: 'warn' },
-                      { label: 'Other expenses', value: data.cost.other, tone: 'navy' },
-                      ...(data.profit.gross > 0
-                        ? [{ label: 'Gross profit', value: data.profit.gross, tone: 'ok' }]
-                        : []),
-                    ]} />
+              {/* ---- the statement, on request -------------------- */}
+              <details className="fold">
+                <summary>
+                  <span className="mark" aria-hidden="true">{'▶'}</span>
+                  <div>
+                    <h3>The statement, and every site</h3>
+                    <p>Revenue less cost as a statement, then the same figures site by site</p>
                   </div>
-                </Card>
-                <Card title="The statement" sub="Revenue less cost">
+                  <div className="sp" />
+                  <span className={`tag ${data.profit.gross >= 0 ? 'ok' : 'bad'}`}>
+                    {money(data.profit.gross)}
+                  </span>
+                </summary>
+
+                <div className="pad">
                   <div className="tw">
                     <table>
                       <tbody>
@@ -700,11 +1031,9 @@ export function ProfitLoss() {
                       </tbody>
                     </table>
                   </div>
-                </Card>
-              </div>
+                </div>
 
-              <Card title="By site" sub="Only sites with a bill can show a margin">
-                <div className="tw">
+                <div className="tw" style={{ borderTop: '1px solid var(--line-2)' }}>
                   <table>
                     <thead>
                       <tr><th>Site</th><th>Client</th><th className="rt">Work order</th>
@@ -743,7 +1072,7 @@ export function ProfitLoss() {
                     </tbody>
                   </table>
                 </div>
-              </Card>
+              </details>
             </>
           )}
       </div>

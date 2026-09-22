@@ -57,6 +57,70 @@ function scope(q, alias = 'c') {
   return { clause: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
 
+
+/**
+ * A gap-free series.
+ *
+ * A GROUP BY only returns the buckets that have rows in them, so a
+ * quiet month simply vanishes and the chart draws March next to June
+ * as if they were neighbours. Every picture on these screens reads
+ * left to right as time, so the empty buckets have to be there —
+ * this fills them in, and caps the run so a five-year window does not
+ * come back as eighteen hundred days.
+ */
+const CAP = { day: 45, week: 26, month: 18 };
+
+const startOf = (iso, kind) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (kind === 'month') d.setUTCDate(1);
+  if (kind === 'week') d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d;
+};
+const step = (d, kind, n = 1) => {
+  const x = new Date(d);
+  if (kind === 'month') x.setUTCMonth(x.getUTCMonth() + n);
+  else x.setUTCDate(x.getUTCDate() + n * (kind === 'week' ? 7 : 1));
+  return x;
+};
+const iso = (d) => d.toISOString().slice(0, 10);
+
+function fillBuckets(rows, keys, kind, from, to) {
+  const have = new Map(rows.map((r) => [String(r.bucket).slice(0, 10), r]));
+  const known = [...have.keys()].sort();
+  const first = from || known[0] || to;
+  if (!first) return [];
+
+  // The range has to cover every row it was handed, whatever the
+  // window says. A document dated ahead of today is ordinary here —
+  // a bill is raised for the month it belongs to — and a series that
+  // stopped at CURDATE simply dropped those rows on the floor.
+  let cursor = startOf(first, kind);
+  const lastKnown = known[known.length - 1];
+  const end = lastKnown && lastKnown > to ? lastKnown : to;
+  const last = startOf(end, kind);
+  const out = [];
+  while (cursor <= last && out.length < 600) {
+    const key = iso(cursor);
+    const hit = have.get(key);
+    const row = { bucket: key };
+    keys.forEach((k) => { row[k] = money(hit ? hit[k] || 0 : 0); });
+    out.push(row);
+    cursor = step(cursor, kind);
+  }
+
+  // A long run is trimmed from the quiet end only. Dropping a bucket
+  // that has rows in it would break the running total drawn over the
+  // series — the line would start partway up and land somewhere that
+  // is not the figure printed beside it.
+  let start = 0;
+  while (out.length - start > CAP[kind]
+    && keys.every((k) => !Number(out[start][k]))) start += 1;
+  return start ? out.slice(start) : out;
+}
+
+/** The database's own today, because the app server may sit elsewhere. */
+const dbToday = async () => (await one(`SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS d`)).d;
+
 /* ==================================================================
    THE EXPENSE REPORT
    ================================================================== */
@@ -104,15 +168,13 @@ router.get('/expense', validate(filters, 'query'), wrap(async (req, res) => {
       GROUP BY bucket ORDER BY bucket`, params);
 
   let run = Number(before.amount);
-  const withRunning = series.map((s) => {
+  const withRunning = fillBuckets(
+    series, ['material', 'expense', 'total'], q.bucket,
+    q.from || (totals.first_on ? String(totals.first_on).slice(0, 10) : null),
+    q.to || await dbToday(),
+  ).map((s) => {
     run += Number(s.total);
-    return {
-      bucket: s.bucket,
-      material: money(s.material),
-      expense: money(s.expense),
-      total: money(s.total),
-      running_value: money(run),
-    };
+    return { ...s, running_value: money(run) };
   });
 
   // what the money went on. Material is one line against the expense
@@ -411,6 +473,62 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
   const total = money(cost.total);
   const available = Number(rev.bills) > 0;
 
+  /* --------------------------------------------------------- the trend
+     A profit and loss as one pair of totals says whether the work has
+     paid so far; it does not say whether it is getting better or
+     worse, which is the question anybody actually asks next. So the
+     same two figures come back period by period, cost from the ledger
+     and revenue from raised bills, on the same buckets and gap-free.
+
+     Cost is counted where it is spent and revenue where it is billed,
+     and the two rarely land in the same month — material goes out in
+     April and is certified in June. That is not an error in the data,
+     it is the shape of the trade, and the cumulative pair below is
+     what makes it readable: the running lines cross where the work
+     turned profitable. */
+  const costFmt = {
+    day: `DATE_FORMAT(c.event_date, '%Y-%m-%d')`,
+    week: `DATE_FORMAT(c.event_date - INTERVAL WEEKDAY(c.event_date) DAY, '%Y-%m-%d')`,
+    month: `DATE_FORMAT(c.event_date, '%Y-%m-01')`,
+  }[q.bucket];
+  const revFmt = {
+    day: `DATE_FORMAT(b.bill_date, '%Y-%m-%d')`,
+    week: `DATE_FORMAT(b.bill_date - INTERVAL WEEKDAY(b.bill_date) DAY, '%Y-%m-%d')`,
+    month: `DATE_FORMAT(b.bill_date, '%Y-%m-01')`,
+  }[q.bucket];
+
+  const [costRows, revRows] = await Promise.all([
+    many(`SELECT ${costFmt} AS bucket, SUM(c.amount) AS cost
+            FROM v_cost_event c ${clause}
+           GROUP BY bucket ORDER BY bucket`, params),
+    many(`SELECT ${revFmt} AS bucket, SUM(l.line_total) AS revenue
+            FROM bills b JOIN bill_lines l ON l.bill_id = b.id
+           WHERE ${revWhere.join(' AND ')}
+           GROUP BY bucket ORDER BY bucket`, revParams),
+  ]);
+
+  const earliest = [costRows[0]?.bucket, revRows[0]?.bucket]
+    .filter(Boolean).map((b) => String(b).slice(0, 10)).sort()[0] || null;
+  const end = q.to || await dbToday();
+  const costSeries = fillBuckets(costRows, ['cost'], q.bucket, q.from || earliest, end);
+  const revSeries = fillBuckets(revRows, ['revenue'], q.bucket, q.from || earliest, end);
+  let runRev = 0;
+  let runCost = 0;
+  const series = costSeries.map((row, i) => {
+    const r = Number(revSeries[i]?.revenue || 0);
+    runRev += r;
+    runCost += Number(row.cost);
+    return {
+      bucket: row.bucket,
+      revenue: r,
+      cost: row.cost,
+      profit: money(r - Number(row.cost)),
+      running_revenue: money(runRev),
+      running_cost: money(runCost),
+      running_profit: money(runRev - runCost),
+    };
+  });
+
   // per site, so a branch view shows which sites are carrying which
   const sites = await many(
     `SELECT s.id AS site_id, s.name AS site_name, s.code AS site_code,
@@ -446,6 +564,8 @@ router.get('/pl', validate(filters, 'query'), wrap(async (req, res) => {
 
   res.json({
     available,
+    bucket: q.bucket,
+    series,
     ...(available ? {} : {
       blockedBy: 'BILLING',
       reason: 'Nothing has been billed in this scope yet. A profit and loss needs revenue, '
