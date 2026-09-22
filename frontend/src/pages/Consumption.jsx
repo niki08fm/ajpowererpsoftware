@@ -286,6 +286,13 @@ export function IssueStock() {
 
   const recent = useApi(
     siteId ? `/consumption/issues?siteId=${siteId}&limit=25` : null, [siteId, tick]);
+  // what this site is actually holding, and what is on its way — an
+  // empty shelf is the commonest reason this screen looks broken, and
+  // the reason is always somewhere else
+  const shelf = useApi(siteId ? `/consumption/issuable/${siteId}` : null, [siteId, tick]);
+  const inbox = useApi(siteId ? `/site-store/${siteId}/inbox` : null, [siteId, tick]);
+  const empty = !shelf.loading && (shelf.data?.rows || []).length === 0;
+  const toSign = (inbox.data?.challans || []).length + (inbox.data?.orders || []).length;
 
   useEffect(() => { setRows([]); setDone(null); }, [siteId]);
 
@@ -352,6 +359,22 @@ export function IssueStock() {
             </Link>}>
             <b>{done.docNo}</b> issued — {qty(done.issuedQty)} units.
             They are off the shelf and counted as consumed.
+          </Banner>
+        )}
+
+        {empty && (
+          <Banner kind="warn" icon="◍"
+            action={toSign > 0
+              ? <Link className="btn sm pri" to={`/site/inbox?site=${siteId}`}>Sign for them</Link>
+              : <Link className="btn sm" to="/indents">See where it is</Link>}>
+            <b>This site is holding nothing yet.</b>{' '}
+            {toSign > 0
+              ? `${toSign} delivery${toSign === 1 ? '' : 'ies'} ${toSign === 1 ? 'is' : 'are'} `
+                + 'waiting to be signed for — material only reaches the shelf once the site '
+                + 'has acknowledged it.'
+              : 'Material reaches this shelf when the site signs for a delivery. Anything '
+                + 'the store has received against your PRN still has to be sent out on a '
+                + 'challan and signed for here.'}
           </Banner>
         )}
 

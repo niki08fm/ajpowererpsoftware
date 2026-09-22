@@ -436,25 +436,41 @@ export function IndentCart() {
 
 /* =================================================================== */
 /**
- * Where the material is. Five stages, and the one it has reached is
- * lit — so a site chasing a delivery can see whether it is waiting on
- * a signature or on a supplier, which are different problems with
- * different people to ring.
+ * Where the material is, all the way to the site.
+ *
+ * The journey has six steps, and the last two are the ones that
+ * matter to the person who raised it: material sitting in the central
+ * store is not material on the site, and it is only "here" when the
+ * site has signed the challan for it.
+ *
+ * Every stage the API can return is named below. It used to stop at
+ * "Received", a stage the API never emits — so a PRN whose material
+ * had reached the store, or even the site, still read "Approved", and
+ * the screen looked broken because it was.
  */
 const STEPS = [
   ['AWAITING_PO', 'Approved'],
   ['PO_WITH_GM', 'With the GM'],
   ['ORDERED', 'Ordered'],
-  ['PART_RECEIVED', 'Arriving'],
-  ['RECEIVED', 'Received'],
+  ['AT_STORE', 'At the store'],
+  ['IN_TRANSIT', 'On the road'],
+  ['AT_SITE', 'At site'],
 ];
 const REACHED = {
-  NOT_APPROVED: -1, AWAITING_PO: 0, PO_WITH_GM: 1,
-  PART_ORDERED: 1, ORDERED: 2, PART_RECEIVED: 3, RECEIVED: 4,
+  NOT_APPROVED: -1,
+  AWAITING_PO: 0,
+  PO_WITH_GM: 1,
+  PART_ORDERED: 2, ORDERED: 2,
+  PART_RECEIVED: 3, AT_STORE: 3,
+  IN_TRANSIT: 4,
+  PART_AT_SITE: 5, AT_SITE: 5,
 };
+// the stages that mean "some of it, not all"
+const PARTLY = ['PART_ORDERED', 'PART_RECEIVED', 'PART_AT_SITE'];
 
 function Pipeline({ stage, onOpen }) {
   const at = REACHED[stage] ?? 0;
+  const part = PARTLY.includes(stage);
   return (
     <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, flexWrap: 'wrap' }}>
       {STEPS.map(([key, label], i) => {
@@ -473,6 +489,9 @@ function Pipeline({ stage, onOpen }) {
             }}>
             <div style={{ fontSize: 10.5, opacity: 0.8 }}>{done ? '✓' : now ? '●' : '○'}</div>
             {label}
+            {now && part && (
+              <div style={{ fontSize: 10.5, fontWeight: 500, opacity: 0.9 }}>part of it</div>
+            )}
           </button>
         );
       })}
@@ -543,9 +562,10 @@ export function IndentDetail() {
                 ['Indent', data.docNo], ['Site', data.site.name],
                 ['Stage', data.pipeline.stage], [],
                 ['Item code', 'Item', 'Unit', 'Indented', 'Ordered', 'With the GM',
-                  'Received', 'Still to come'],
+                  'At the store', 'On the road', 'At site', 'Still to reach the site'],
                 ...data.flow.map((f) => [f.item_code, f.item_name, f.uom, f.indented_qty,
-                  f.ordered_qty, f.pending_gm_qty, f.received_qty, f.to_receive_qty]),
+                  f.ordered_qty, f.pending_gm_qty, f.received_qty, f.in_transit_qty,
+                  f.at_site_qty, f.to_deliver_qty]),
               ])}>Download</button>
             }>
             <div className="pad">
@@ -553,9 +573,12 @@ export function IndentDetail() {
               <div className="stats" style={{ marginTop: 14 }}>
                 <Stat n={qty(data.pipeline.indented_qty)} label="indented" />
                 <Stat n={qty(data.pipeline.ordered_qty)} label="ordered" />
-                <Stat n={qty(data.pipeline.received_qty)} label="received" tone="brand" />
-                <Stat n={qty(data.pipeline.to_receive_qty)} label="still to come"
-                  tone={Number(data.pipeline.to_receive_qty) > 0 ? 'warn' : undefined} />
+                <Stat n={qty(data.pipeline.received_qty)} label="received at the store" />
+                <Stat n={qty(data.pipeline.in_transit_qty)} label="on the road"
+                  tone={Number(data.pipeline.in_transit_qty) > 0 ? 'warn' : undefined} />
+                <Stat n={qty(data.pipeline.at_site_qty)} label="at site" tone="brand" />
+                <Stat n={qty(data.pipeline.to_deliver_qty)} label="still to reach the site"
+                  tone={Number(data.pipeline.to_deliver_qty) > 0 ? 'warn' : undefined} />
               </div>
             </div>
 
@@ -565,7 +588,8 @@ export function IndentDetail() {
                   <tr>
                     <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
                     <th className="rt">Indented</th><th className="rt">Ordered</th>
-                    <th className="rt">Received</th><th className="rt">Still to come</th>
+                    <th className="rt">At the store</th><th className="rt">At site</th>
+                    <th className="rt">Still to reach the site</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -584,9 +608,17 @@ export function IndentDetail() {
                         )}
                       </td>
                       <td className="rt mono">{Number(f.received_qty) ? qty(f.received_qty) : '—'}</td>
+                      <td className="rt mono">
+                        {Number(f.at_site_qty) ? <b>{qty(f.at_site_qty)}</b> : '—'}
+                        {Number(f.in_transit_qty) > 0 && (
+                          <small style={{ color: 'var(--warn)' }}>
+                            {qty(f.in_transit_qty)} on the road
+                          </small>
+                        )}
+                      </td>
                       <td className="rt mono"
-                        style={{ color: Number(f.to_receive_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
-                        <b>{Number(f.to_receive_qty) ? qty(f.to_receive_qty) : 'nil'}</b>
+                        style={{ color: Number(f.to_deliver_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
+                        <b>{Number(f.to_deliver_qty) ? qty(f.to_deliver_qty) : 'nil'}</b>
                       </td>
                     </tr>
                   ))}

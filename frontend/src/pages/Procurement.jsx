@@ -17,13 +17,19 @@ import {
  * by three sites is one negotiation.
  */
 
+// every stage v_indent_pipeline can return, named. A stage missing
+// from here used to print its own database name at the reader
 const STAGES = {
+  NOT_APPROVED: { label: 'Not approved yet', kind: '' },
   AWAITING_PO: { label: 'Waiting for an order', kind: 'bad' },
   PO_WITH_GM: { label: 'With the GM', kind: 'warn' },
   PART_ORDERED: { label: 'Part ordered', kind: 'warn' },
   ORDERED: { label: 'Ordered', kind: 'ok' },
-  PART_RECEIVED: { label: 'Part received', kind: 'warn' },
-  RECEIVED: { label: 'Received', kind: 'ok' },
+  PART_RECEIVED: { label: 'Part received at the store', kind: 'warn' },
+  AT_STORE: { label: 'At the store', kind: 'ok' },
+  IN_TRANSIT: { label: 'On the road to site', kind: 'warn' },
+  PART_AT_SITE: { label: 'Part at site', kind: 'warn' },
+  AT_SITE: { label: 'At site', kind: 'ok' },
 };
 export const StageTag = ({ stage, extra }) => {
   const s = STAGES[stage] || { label: stage, kind: '' };
@@ -134,7 +140,10 @@ export default function Procurement() {
                 <option value="AWAITING_PO">Waiting for an order</option>
                 <option value="PART_ORDERED">Part ordered</option>
                 <option value="ORDERED">Ordered</option>
-                <option value="PART_RECEIVED">Part received</option>
+                <option value="PART_RECEIVED">Part received at the store</option>
+                <option value="AT_STORE">At the store</option>
+                <option value="IN_TRANSIT">On the road to site</option>
+                <option value="AT_SITE">At site</option>
                 <option value="RECEIVED">Received</option>
                 <option value="ALL">Everything</option>
               </select>
