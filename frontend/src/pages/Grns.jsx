@@ -22,14 +22,53 @@ import { Icon } from '../components/icons';
 /* ===================================================================
    Receiving against a purchase order. This is what writes the GRN.
    =================================================================== */
+/**
+ * The GRN as a receipt: what came off this lorry, signed for by the
+ * store and by whoever delivered it. The driver takes a copy away as
+ * proof of what was handed over. Ordered and still-owed stay off it —
+ * the note claims only what arrived.
+ */
+export function printGrn(g) {
+  printDoc({
+    title: 'Goods Receipt Note',
+    docNo: g.doc_no,
+    sub: `Received at ${g.site_name}`,
+    meta: [
+      ['Received on', dmy(g.receipt_date)],
+      ['Supplier', g.supplier_name],
+      ["Supplier's challan / invoice", g.supplier_dc || '—'],
+      ['Against PO', g.po_no],
+      ['Received by', g.received_by_name || '—'],
+      g.note ? ['Remark', g.note] : null,
+    ],
+    columns: [
+      { label: 'Item code' }, { label: 'Item' }, { label: 'Unit' },
+      { label: 'Received', rt: true },
+    ],
+    rows: g.lines.map((l) => [l.item_code, l.item_name, l.uom, qty(l.qty)]),
+    totals: ['', '', 'Total', qty(g.grn_qty)],
+    note: 'Received the goods listed above from the supplier\'s vehicle, in the quantities shown, '
+      + 'subject to inspection. One copy for the store, one for the driver.',
+    signs: ['Received by (store)', 'Delivered by (driver / supplier)'],
+    footer: g.status === 'CONFIRMED'
+      ? 'This material is in stock.'
+      : 'DRAFT — this material is not in stock yet.',
+  });
+}
+
 export function ReceiveGrn({ poId, at, atSiteId, onClose, onDone }) {
   const toast = useToast();
   const { data, loading } = useApi(`/purchase-orders/${poId}/pending`, [poId]);
   const [got, setGot] = useState({});
   const [head, setHead] = useState({ receiptDate: today(), supplierDc: '', note: '' });
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);     // the GRN just created
 
   const lines = (data?.lines || []).filter((l) => Number(got[l.po_line_id]) > 0);
+
+  const printForDriver = async () => {
+    try { printGrn(await api.get(`/grns/${done.id}`)); } catch (e) { toast(e.message, 'bad'); }
+  };
   const total = lines.reduce((t, l) => t + Number(got[l.po_line_id]), 0);
 
   const save = async () => {
@@ -46,13 +85,35 @@ export function ReceiveGrn({ poId, at, atSiteId, onClose, onDone }) {
       toast(r.poState === 'RECEIVED'
         ? `${r.docNo} created — the purchase order is received in full`
         : `${r.docNo} created — ${qty(r.pendingQty)} still to receive on this order`, 'ok');
-      onDone(r);
+      // stay open: the driver is standing there waiting for his copy
+      setDone(r);
     } catch (e) { toast(e.message, 'bad'); }
     setBusy(false);
     return undefined;
   };
 
   if (loading) return <Modal wide title="Receive from supplier" onClose={onClose}><Loading what="the purchase order" /></Modal>;
+
+  if (done) {
+    return (
+      <Modal title={`${done.docNo} created`} onClose={() => onDone(done)}
+        footer={<>
+          <button className="btn" onClick={() => onDone(done)}>Done</button>
+          <button className="btn pri" onClick={printForDriver}><Icon name="print" size={14} />Print receipt for the driver</button>
+        </>}>
+        <Banner kind="ok">
+          {qty(total)} received against {data.docNo} and recorded on <b>{done.docNo}</b>.{' '}
+          {done.poState === 'RECEIVED'
+            ? 'The purchase order is now received in full.'
+            : `${qty(done.pendingQty)} is still to come on this order — the next delivery gets its own GRN.`}
+        </Banner>
+        <p style={{ margin: 0, color: 'var(--muted)' }}>
+          Print the receipt and sign it with the driver: one copy stays with the store, one goes with him
+          as proof of what was handed over.
+        </p>
+      </Modal>
+    );
+  }
 
   return (
     <Modal wide title={`Receive against ${data.docNo}`}
@@ -428,28 +489,7 @@ export function GrnDetail() {
   // The note is a record of what arrived. Ordered, still owed and the
   // rest belong to the order; putting them on the note invites somebody
   // to read a number off it that the note is not making a claim about.
-  const slip = () => printDoc({
-    title: 'Goods Receipt Note',
-    docNo: data.doc_no,
-    sub: `Received at ${data.site_name}`,
-    meta: [
-      ['Received on', dmy(data.receipt_date)],
-      ['Supplier', data.supplier_name],
-      ["Supplier's challan / invoice", data.supplier_dc || '—'],
-      ['Against PO', data.po_no],
-      ['Received by', data.received_by_name || '—'],
-      data.note ? ['Remark', data.note] : null,
-    ],
-    columns: [
-      { label: 'Item code' }, { label: 'Item' }, { label: 'Unit' },
-      { label: 'Received', rt: true },
-    ],
-    rows: data.lines.map((l) => [l.item_code, l.item_name, l.uom, qty(l.qty)]),
-    totals: ['', '', 'Total', qty(data.grn_qty)],
-    footer: data.status === 'CONFIRMED'
-      ? 'This material is in stock.'
-      : 'DRAFT — this material is not in stock yet.',
-  });
+  const slip = () => printGrn(data);
 
   const grab = () => downloadCsv(`grn-${data.doc_no}`, [
     ['Goods receipt note', data.doc_no],

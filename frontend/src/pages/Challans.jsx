@@ -7,6 +7,7 @@ import {
   useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Meter, useToast, Code, Status,
   DateField, DocHead, NextStep,
 } from '../components/ui';
+import { PrnLink } from '../components/StorePrn';
 import { Icon } from '../components/icons';
 import { dcState, prnStage } from '../vocab';
 
@@ -404,8 +405,8 @@ export function ChallanDetail() {
                   <tbody>
                     {data.prns.map((p) => (
                       <tr key={p.indent_id}>
-                        <td><Link className="linkish" to={`/indents/${p.indent_id}`}>
-                          <Code>{p.doc_no}</Code></Link></td>
+                        <td><PrnLink id={p.indent_id}>
+                          <Code>{p.doc_no}</Code></PrnLink></td>
                         <td className="mono">{p.needed_by ? dmy(p.needed_by) : '—'}</td>
                         <td className="rt mono"><b>{qty(p.on_this_dc)}</b></td>
                         <td>

@@ -6,6 +6,7 @@ import { downloadCsv } from '../download';
 import {
   useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast, Code, Status, DateField,
 } from '../components/ui';
+import { PrnLink } from '../components/StorePrn';
 import { Icon } from '../components/icons';
 import { dcState } from '../vocab';
 import { ReceiveGrn } from './Grns';
@@ -350,8 +351,8 @@ export function Prns() {
                           : on ? { background: 'var(--brand-soft)' } : undefined}>
                         <td><input type="checkbox" checked={on} aria-label={`Tick ${r.doc_no} to dispatch`}
                           onChange={() => toggle(r.indent_id)} /></td>
-                        <td><Link to={`/indents/${r.indent_id}`}>
-                          <Code as="b">{r.doc_no}</Code></Link>
+                        <td><PrnLink id={r.indent_id}>
+                          <Code as="b">{r.doc_no}</Code></PrnLink>
                           <small>{dmy(r.indent_date)} · {plural(r.item_count, 'item')}</small></td>
                         <td>{r.site_name}<small><Code>{r.site_code}</Code></small></td>
                         <td className="mono">
@@ -522,10 +523,10 @@ export function IssueSheet() {
         <Card title="PRNs on this challan">
           <div className="pad" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {data.prns.map((p) => (
-              <Link key={p.indent_id} className="chip" to={`/indents/${p.indent_id}`}>
+              <PrnLink key={p.indent_id} id={p.indent_id} className="chip">
                 <Code as="b">{p.doc_no}</Code>
                 <small>{p.needed_by ? `needed by ${dmy(p.needed_by)}` : 'no needed-by date'} · {qty(p.to_deliver_qty)} still to deliver</small>
-              </Link>
+              </PrnLink>
             ))}
           </div>
         </Card>
@@ -642,7 +643,7 @@ export function IssueSheet() {
                               </td>
                             </>
                           )}
-                          <td><Link to={`/indents/${l.indentId}`} className="linkish"><Code>{l.prnNo}</Code></Link>
+                          <td><PrnLink id={l.indentId}><Code>{l.prnNo}</Code></PrnLink>
                             {l.neededBy && <small>needed by {dmy(l.neededBy)}</small>}</td>
                           <td className="rt mono"><b>{qty(l.toDeliverQty)}</b></td>
                           <td className="rt mono">

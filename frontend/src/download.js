@@ -38,7 +38,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) =>
  * page, which is a worse outcome but not a lost one.
  */
 export function printDoc({ title, docNo, sub, meta = [], columns = [], rows = [],
-  totals = null, note = '', footer = '' }) {
+  totals = null, note = '', footer = '', signs = ['Received by', 'Issued by'] }) {
   const html = `<!doctype html><html><head><meta charset="utf-8">
 <title>${esc(docNo || title)}</title>
 <style>
@@ -76,7 +76,7 @@ export function printDoc({ title, docNo, sub, meta = [], columns = [], rows = []
       `<td class="${columns[i]?.rt ? 'rt mono' : ''}">${esc(v)}</td>`).join('')}</tr></tfoot>` : ''}
   </table>
   ${note ? `<p class="note">${esc(note)}</p>` : ''}
-  <div class="sign"><div>Received by</div><div>Issued by</div></div>
+  <div class="sign">${signs.map((x) => `<div>${esc(x)}</div>`).join('')}</div>
   ${footer ? `<p class="foot">${esc(footer)}</p>` : ''}
 <script>window.onload = function () { window.print(); };<\/script>
 </body></html>`;
