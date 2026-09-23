@@ -399,14 +399,15 @@ router.get('/:id', wrap(async (req, res) => {
     `SELECT il.id, il.qty, il.over_qty, il.remark, il.boq_line_id, il.item_id, il.make_id,
             bl.sno, i2.code AS item_code, i2.name AS item_name, u.code AS uom,
             mk.name AS make_name,
-            st.effective_est, st.boq_qty, st.est_qty, st.var_qty, st.balance, st.committed_qty
+            st.effective_est, st.boq_qty, st.est_qty, st.var_qty, st.balance, st.committed_qty,
+            st.wo_sno, st.wo_description
        FROM indent_lines il
        JOIN boq_lines bl ON bl.id = il.boq_line_id
        JOIN items i2 ON i2.id = il.item_id
        JOIN uoms u ON u.id = bl.uom_id
        LEFT JOIN makes mk ON mk.id = il.make_id
        LEFT JOIN v_boq_line_status st ON st.boq_line_id = bl.id
-      WHERE il.indent_id = ? ORDER BY bl.sno`, [ind.id]
+      WHERE il.indent_id = ? ORDER BY st.wo_sno, bl.sno`, [ind.id]
   );
   const events = await many(
     `SELECT e.action, e.note, e.created_at, u.name AS user_name
@@ -448,7 +449,7 @@ router.get('/:id', wrap(async (req, res) => {
     orders,
     site: { id: ind.site_id, name: ind.site_name },
     indentDate: ind.indent_date, neededBy: ind.needed_by, raisedBy: ind.raised_by_name,
-    boqDocNo: ind.boq_doc_no,
+    boqId: ind.boq_id, boqDocNo: ind.boq_doc_no,
     policy: { overAllow: !!ind.over_allow, overPct: ind.over_pct },
     severity: severityOf(ind, over.length),
     overLines: over.length,

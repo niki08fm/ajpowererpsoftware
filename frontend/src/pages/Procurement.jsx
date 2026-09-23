@@ -44,6 +44,9 @@ export default function Procurement() {
   const [picked, setPicked] = useState([]);
   // the same demand two ways: PRN by PRN, or added up per item
   const [view, setView] = useState('prn');
+  // an order raised from "By item": the PRNs behind the chosen items, and
+  // how much of each item to put on it
+  const [itemOrder, setItemOrder] = useState(null);
   const [buying, setBuying] = useState(false);
   const [comparing, setComparing] = useState(false);
   const nav = useNavigate();
@@ -182,7 +185,8 @@ export default function Procurement() {
         </div>
 
         {view === 'item' && (
-          <ItemsToBuy branchId={branchId} siteId={f.siteId} q={f.q} />
+          <ItemsToBuy branchId={branchId} siteId={f.siteId} q={f.q}
+            onOrder={(indentIds, only) => setItemOrder({ indentIds, only })} />
         )}
 
         {view === 'prn' && (loading && !data ? <Loading what="PRNs to buy" /> : (
@@ -208,7 +212,10 @@ export default function Procurement() {
                       <td style={{ textAlign: 'center' }}>
                         <input type="checkbox" readOnly tabIndex={-1} checked={picked.includes(r.id)} aria-label={`Tick ${r.doc_no}`} />
                       </td>
-                      <td><Code as="b">{r.doc_no}</Code><small>by {r.raised_by_name}</small></td>
+                      <td>
+                        <Code as="b">{r.doc_no}</Code><small>by {r.raised_by_name}</small>
+                        <ViewPrn id={r.id} />
+                      </td>
                       <td>{r.site_name}<small><Code>{r.site_code}</Code></small></td>
                       <td className="mono">
                         {r.needed_by ? dmy(r.needed_by) : '—'}
@@ -242,6 +249,12 @@ export default function Procurement() {
         ))}
       </div>
 
+      {itemOrder && (
+        <NewOrder indentIds={itemOrder.indentIds} only={itemOrder.only}
+          onClose={() => setItemOrder(null)}
+          onDone={() => { setItemOrder(null); reload(); toast('Purchase order raised', 'ok'); }} />
+      )}
+
       {buying && (
         <NewOrder indentIds={picked} comparison={cmp && cmp.status === 'APPROVED' ? cmp : null}
           onClose={() => { setBuying(false); setParams({}); }}
@@ -258,7 +271,7 @@ export default function Procurement() {
    with what the store holds beside it — because the cheapest way to
    fill a requirement is often not to buy it.
    =================================================================== */
-function NewOrder({ indentIds, comparison, onClose, onDone }) {
+function NewOrder({ indentIds, comparison, only, onClose, onDone }) {
   const nav = useNavigate();
   const toast = useToast();
   const [demand, setDemand] = useState(null);
@@ -294,9 +307,10 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
           supplierId: comparison ? String(comparison.chosen_supplier_id) : h.supplierId,
         }));
         setOrder(Object.fromEntries(d.lines
-          .filter((l) => l.toOrderQty > 0)
+          .filter((l) => l.toOrderQty > 0 && (!only || only[l.itemId] != null))
           .map((l) => [l.itemId, {
-            qty: String(l.toOrderQty),
+            // raised from "By item": the quantity the buyer chose there
+            qty: String(only ? Math.min(Number(only[l.itemId]), l.toOrderQty) : l.toOrderQty),
             rate: String(quoted[l.itemId] ?? l.suggestedRate ?? ''),
             gstRate: String(l.gstRate),
           }])));
@@ -353,7 +367,9 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
 
   return (
     <Modal full title="Raise purchase order"
-      sub={`${plural(demand.indents.length, 'PRN')} · ${plural(demand.lines.length, 'item')}`}
+      sub={only
+        ? `${plural(Object.keys(only).length, 'item')} chosen by item · from ${plural(demand.indents.length, 'PRN')}`
+        : `${plural(demand.indents.length, 'PRN')} · ${plural(demand.lines.length, 'item')}`}
       onClose={onClose}
       footer={<>
         <div style={{ marginRight: 'auto', display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -434,7 +450,7 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
               </tr>
             </thead>
             <tbody>
-              {demand.lines.map((l) => {
+              {demand.lines.filter((l) => !only || only[l.itemId] != null).map((l) => {
                 const o = order[l.itemId] || {};
                 const basic = Number(o.qty || 0) * Number(o.rate || 0);
                 const amt = basic + (basic * Number(o.gstRate || 0)) / 100;
@@ -491,20 +507,43 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
    item to order, added up. Open an item to see which PRNs want it and
    on which BOQ lines of each (1a-5, 2b-10).
    =================================================================== */
-function ItemsToBuy({ branchId, siteId, q }) {
+function ItemsToBuy({ branchId, siteId, q, onOrder }) {
   const [sort, setSort] = useState('item');
   const [open, setOpen] = useState(null);
+  const [pick, setPick] = useState({});   // row key -> quantity to order now
+  const canOrder = canWrite('/purchase-orders');
   const qs = new URLSearchParams({
     ...(branchId ? { branchId } : {}), ...(siteId ? { siteId } : {}), ...(q ? { q } : {}), sort,
   }).toString();
   const { data, error, loading, reload } = useApi(`/procurement/items?${qs}`, [qs]);
   const rows = data?.rows || [];
   const key = (r) => `${r.item_id}-${r.make_id || ''}`;
+  const chosen = rows.filter((r) => pick[key(r)] != null);
+  const bad = chosen.find((r) => !(Number(pick[key(r)]) > 0) || Number(pick[key(r)]) > Number(r.to_order_qty));
+  const togglePick = (r) => setPick((x) => {
+    const k = key(r);
+    const next = { ...x };
+    // start at what the central store cannot cover; all of it if it covers everything
+    if (next[k] != null) delete next[k];
+    else next[k] = String(Number(r.short_qty) > 0 ? Number(r.short_qty) : Number(r.to_order_qty));
+    return next;
+  });
+  const raise = () => {
+    const ids = new Set();
+    const only = {};
+    for (const r of chosen) {
+      String(r.indent_ids || '').split(',').filter(Boolean).forEach((id) => ids.add(Number(id)));
+      only[r.item_id] = Number(pick[key(r)]);
+    }
+    onOrder([...ids], only);
+  };
 
   const grab = () => downloadCsv('items-to-buy', [
-    ['Item code', 'Item', 'Make', 'Unit', 'PRNs', 'Sites', 'Asked for', 'Ordered', 'Awaiting approval', 'To order', 'First needed'],
+    ['Item code', 'Item', 'Make', 'Unit', 'PRNs', 'Sites', 'Asked for', 'Ordered', 'Awaiting approval', 'To order',
+      'At central store', 'Short', 'First needed'],
     ...rows.map((r) => [r.item_code, r.item_name, r.make_name || '', r.uom, r.prns, r.site_names,
-      r.indented_qty, r.ordered_qty, r.pending_gm_qty, r.to_order_qty, r.first_needed ? dmy(r.first_needed) : '']),
+      r.indented_qty, r.ordered_qty, r.pending_gm_qty, r.to_order_qty, r.store_qty, r.short_qty,
+      r.first_needed ? dmy(r.first_needed) : '']),
   ]);
 
   if (error) return <ErrorNote error={error} onRetry={reload} />;
@@ -513,6 +552,12 @@ function ItemsToBuy({ branchId, siteId, q }) {
       sub={`${plural(rows.length, 'item')} still to order across approved PRNs — open one to see its PRNs and BOQ lines`}
       actions={
         <>
+          {canOrder && (
+            <button className="btn pri" disabled={!chosen.length || !!bad} onClick={raise}
+              title={bad ? `${bad.item_name}: order between 1 and ${qty(bad.to_order_qty)}` : undefined}>
+              <Icon name="cart" />{chosen.length ? `Raise purchase order for ${plural(chosen.length, 'item')}` : 'Tick items to order'}
+            </button>
+          )}
           <select className="inp" style={{ width: 190 }} value={sort} onChange={(e) => setSort(e.target.value)}
             aria-label="Sort items">
             <option value="item">Item name</option>
@@ -528,10 +573,14 @@ function ItemsToBuy({ branchId, siteId, q }) {
           <table>
             <thead>
               <tr>
+                {canOrder && <th style={{ width: 36 }}><span className="vh">Tick to order</span></th>}
                 <th style={{ width: 28 }} />
                 <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
                 <th className="rt">PRNs</th><th>Sites</th><th>First needed</th>
                 <th className="rt">Asked for</th><th className="rt">Ordered</th><th className="rt">To order</th>
+                <th className="rt" title="On the shelf at the central store now">At central store</th>
+                <th className="rt" title="To order, less what the central store holds">Short</th>
+                {canOrder && <th className="rt" style={{ width: 110 }}>Order now</th>}
               </tr>
             </thead>
             <tbody>
@@ -542,7 +591,13 @@ function ItemsToBuy({ branchId, siteId, q }) {
                   <Fragment key={k}>
                     <tr className="click" tabIndex={0} aria-expanded={isOpen}
                       onClick={() => setOpen(isOpen ? null : k)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(isOpen ? null : k); } }}>
+                      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen(isOpen ? null : k); } }}
+                      style={pick[k] != null ? { background: 'var(--brand-soft)' } : undefined}>
+                      {canOrder && (
+                        <td style={{ textAlign: 'center' }} onClick={(e) => { e.stopPropagation(); togglePick(r); }}>
+                          <input type="checkbox" readOnly checked={pick[k] != null} aria-label={`Order ${r.item_name}`} />
+                        </td>
+                      )}
                       <td><Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={14} /></td>
                       <td style={{ whiteSpace: 'nowrap' }}><Code>{r.item_code}</Code></td>
                       <td><b>{r.item_name}</b>{r.make_name && <small>{r.make_name}</small>}</td>
@@ -556,11 +611,30 @@ function ItemsToBuy({ branchId, siteId, q }) {
                         {Number(r.pending_gm_qty) > 0 && <small>{qty(r.pending_gm_qty)} awaiting approval</small>}
                       </td>
                       <td className="rt mono"><b>{qty(r.to_order_qty)}</b></td>
+                      <td className="rt mono">
+                        {Number(r.store_qty) ? qty(r.store_qty) : '—'}
+                        {r.store_names && Number(r.store_qty) > 0 && <small>{r.store_names}</small>}
+                      </td>
+                      <td className="rt mono">
+                        {Number(r.short_qty) > 0
+                          ? <b style={{ color: 'var(--st-stop)' }}>{qty(r.short_qty)}</b>
+                          : <Status tone="done" label="In stock" />}
+                      </td>
+                      {canOrder && (
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {pick[k] != null && (
+                            <input className="inp rt" type="number" min="0" step="any" inputMode="decimal"
+                              style={{ width: 96 }} aria-label={`Quantity of ${r.item_name} to order now`}
+                              value={pick[k]} max={Number(r.to_order_qty)}
+                              onChange={(e) => setPick((x) => ({ ...x, [k]: e.target.value }))} />
+                          )}
+                        </td>
+                      )}
                     </tr>
                     {isOpen && (
                       <tr>
-                        <td />
-                        <td colSpan={9} style={{ background: 'var(--line-2)' }}>
+                        <td colSpan={canOrder ? 2 : 1} />
+                        <td colSpan={canOrder ? 12 : 11} style={{ background: 'var(--line-2)' }}>
                           <ItemSplit item={r} branchId={branchId} siteId={siteId} />
                         </td>
                       </tr>
@@ -569,7 +643,7 @@ function ItemsToBuy({ branchId, siteId, q }) {
                 );
               })}
               {!rows.length && (
-                <tr><td colSpan={10}>
+                <tr><td colSpan={canOrder ? 14 : 12}>
                   <Empty icon="check" title="Nothing to buy">
                     Every item on the approved PRNs here is already on a purchase order.
                   </Empty>
@@ -603,7 +677,10 @@ function ItemSplit({ item, branchId, siteId }) {
       <tbody>
         {data.prns.map((p) => (
           <tr key={p.id}>
-            <td><Link to={`/indents/${p.id}`}><Code as="b">{p.doc_no}</Code></Link><small>{dmy(p.indent_date)}</small></td>
+            <td>
+              <Code as="b">{p.doc_no}</Code><small>{dmy(p.indent_date)}</small>
+              <ViewPrn id={p.id} />
+            </td>
             <td>{p.site_name}<small>{p.branch_name}</small></td>
             <td className="mono">{p.needed_by ? dmy(p.needed_by) : '—'}</td>
             <td className="mono">{p.lines.map((l) => `${l.sno}-${qty(l.qty)}`).join(', ')}</td>
@@ -614,5 +691,156 @@ function ItemSplit({ item, branchId, siteId }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/* ===================================================================
+   The PRN as the site raised it, in a small window: its BOQ lines, what
+   was asked on each, and the site's remarks — without leaving the list.
+   =================================================================== */
+function ViewPrn({ id }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className="btn sm" style={{ marginTop: 4 }}
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}>
+        <Icon name="eye" size={14} />View PRN
+      </button>
+      {open && <PrnPeek id={id} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function PrnPeek({ id, onClose }) {
+  const { data, error, loading } = useApi(`/indents/${id}`, [id]);
+  const [view, setView] = useState('items');
+  // the whole BOQ, only when asked for
+  const boq = useApi(view === 'boq' && data?.boqId ? `/indents/boq/${data.boqId}/lines` : null,
+    [view, data?.boqId]);
+
+  // one row per item, with the BOQ lines it was asked on (1a-15, 2a-5)
+  const items = useMemo(() => {
+    const by = new Map();
+    for (const l of data?.lines || []) {
+      const k = `${l.item_id}-${l.make_id || ''}`;
+      const it = by.get(k) || { key: k, code: l.item_code, name: l.item_name, make: l.make_name, uom: l.uom, qty: 0, on: [] };
+      it.qty += Number(l.qty) || 0;
+      it.on.push(`${l.sno}-${qty(l.qty)}`);
+      by.set(k, it);
+    }
+    return [...by.values()].sort((x, y) => x.name.localeCompare(y.name));
+  }, [data]);
+
+  // the full BOQ as work-order headings with their lines under them
+  const asked = useMemo(() => Object.fromEntries((data?.lines || []).map((l) => [l.boq_line_id, Number(l.qty)])), [data]);
+  const groups = useMemo(() => {
+    const rows = Array.isArray(boq.data) ? boq.data : (boq.data?.lines || []);
+    const by = new Map();
+    for (const l of rows) {
+      const g = by.get(l.wo_sno) || { sno: l.wo_sno, description: l.wo_description, lines: [] };
+      g.lines.push(l);
+      by.set(l.wo_sno, g);
+    }
+    return [...by.values()].sort((a, b) => Number(a.sno) - Number(b.sno));
+  }, [boq.data]);
+
+  const ap = data?.approval;
+  const total = (data?.lines || []).reduce((t, l) => t + Number(l.qty || 0), 0);
+  return (
+    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <Modal wide title={data ? `${data.docNo} — as raised by the site` : 'PRN'}
+        sub="For reference — what the site asked for, and where it sits in the BOQ"
+        onClose={onClose}
+        actions={data && (
+          <div className="seg" role="group" aria-label="How to show the PRN">
+            <button type="button" aria-pressed={view === 'items'} onClick={() => setView('items')}>Items</button>
+            <button type="button" aria-pressed={view === 'boq'} onClick={() => setView('boq')}>Full BOQ</button>
+          </div>
+        )}
+        footer={<button className="btn pri" onClick={onClose}>Close</button>}>
+        {error && <ErrorNote error={error} />}
+        {loading && !data ? <Loading what="the PRN" /> : data && (
+          <>
+            <div className="stats" style={{ marginBottom: 16 }}>
+              <Stat n={data.site.name} label="site" />
+              <Stat n={data.boqDocNo} label="BOQ" />
+              <Stat n={data.raisedBy || '—'} label={`raised on ${dmy(data.indentDate)}`} />
+              <Stat n={data.neededBy ? dmy(data.neededBy) : '—'} label="needed by" />
+              {ap && <Stat n={`${ap.approvedCount} of ${ap.steps.length}`}
+                label={ap.status === 'APPROVED' ? 'approved' : 'approvals so far'} />}
+            </div>
+
+            {view === 'items' ? (
+              <div className="tw">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
+                      <th className="rt" style={{ width: 90 }}>Asked</th>
+                      <th title="BOQ line - quantity asked on it">BOQ lines</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => (
+                      <tr key={it.key}>
+                        <td style={{ whiteSpace: 'nowrap' }}><Code>{it.code}</Code></td>
+                        <td>{it.name}{it.make && <small>{it.make}</small>}</td>
+                        <td>{it.uom}</td>
+                        <td className="rt mono"><b>{qty(it.qty)}</b></td>
+                        <td className="mono" style={{ color: 'var(--muted)' }}>{it.on.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <th colSpan={3} style={{ textAlign: 'left' }}>{plural(items.length, 'item')}</th>
+                      <th className="rt mono">{qty(total)}</th>
+                      <th />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            ) : boq.loading && !boq.data ? <Loading what="the BOQ" /> : boq.error ? <ErrorNote error={boq.error} /> : (
+              <div className="tw">
+                <table className="sheet">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 64 }}>Sl no</th><th>Description</th><th style={{ width: 62 }}>Unit</th>
+                      <th className="rt" style={{ width: 86 }}>BOQ qty</th>
+                      <th className="rt" style={{ width: 104 }} title="On every PRN sent so far, this one included">Indented till date</th>
+                      <th className="rt" style={{ width: 90 }}>Asked now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groups.map((g) => (
+                      <Fragment key={g.sno}>
+                        <tr className="wo-row">
+                          <td className="sn">{g.sno}</td>
+                          <td colSpan={5}><b>{g.description}</b></td>
+                        </tr>
+                        {g.lines.map((l) => {
+                          const now = asked[l.boq_line_id];
+                          return (
+                            <tr key={l.boq_line_id} className="kid"
+                              style={now ? { background: 'var(--brand-soft)' } : undefined}>
+                              <td>{l.sno}</td>
+                              <td>{l.item_name}<small><Code>{l.item_code}</Code>{l.make_name ? ` · ${l.make_name}` : ''}</small></td>
+                              <td>{l.uom}</td>
+                              <td className="rt mono">{qty(l.effective_est)}</td>
+                              <td className="rt mono">{Number(l.committed_qty) ? qty(l.committed_qty) : '—'}</td>
+                              <td className="rt mono">{now ? <b>{qty(now)}</b> : <span style={{ color: 'var(--faint)' }}>—</span>}</td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
+    </div>
   );
 }

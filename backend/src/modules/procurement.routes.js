@@ -219,13 +219,42 @@ router.get('/items', validate(itemFilters, 'query'), wrap(async (req, res) => {
             COUNT(DISTINCT i.id)          AS prns,
             COUNT(DISTINCT i.site_id)     AS sites,
             MIN(i.needed_by)              AS first_needed,
-            GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') AS site_names
+            GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') AS site_names,
+            -- the PRNs behind the total, so an order raised from this row
+            -- can be split back across them
+            GROUP_CONCAT(DISTINCT i.id ORDER BY i.id) AS indent_ids,
+            GROUP_CONCAT(DISTINCT s.branch_id) AS branch_ids
        FROM v_indent_item_flow f
        JOIN indents i ON i.id = f.indent_id
        JOIN sites s   ON s.id = i.site_id
       WHERE ${where}
       GROUP BY f.item_id, f.make_id, f.item_code, f.item_name, f.uom, f.make_name
       ORDER BY ${order}`, params);
+
+  // what the central store of each branch these PRNs belong to already
+  // holds — the cheapest way to fill a PRN is often not to buy it
+  const branchIds = [...new Set(rows.flatMap((r) => String(r.branch_ids || '').split(',')
+    .filter(Boolean).map(Number)))];
+  const stores = {};
+  for (const b of branchIds) {
+    const st = await centralStore(b);
+    if (st) stores[b] = st;
+  }
+  const storeIds = Object.values(stores).map((st) => st.id);
+  const stock = storeIds.length && rows.length ? await many(
+    `SELECT site_id, item_id, qty FROM v_stock_balance
+      WHERE site_id IN (?) AND item_id IN (?)`,
+    [storeIds, [...new Set(rows.map((r) => r.item_id))]]) : [];
+  for (const r of rows) {
+    const mine = String(r.branch_ids || '').split(',').filter(Boolean)
+      .map((b) => stores[b]?.id).filter(Boolean);
+    r.store_qty = stock.filter((x) => x.item_id === r.item_id && mine.includes(x.site_id))
+      .reduce((t, x) => t + Number(x.qty), 0);
+    r.short_qty = Math.max(Number(r.to_order_qty) - r.store_qty, 0);
+    r.store_names = mine.map((id) => Object.values(stores).find((st) => st.id === id)?.name).join(', ');
+    delete r.branch_ids;
+  }
+
   res.json({
     rows,
     totals: {
