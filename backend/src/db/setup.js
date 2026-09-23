@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
 const env = require('./../config/env');
+const password = require('../lib/password');
 
 const files = (dir) =>
   fs.readdirSync(path.join(__dirname, dir)).filter((f) => f.endsWith('.sql')).sort();
@@ -70,6 +71,18 @@ async function setup({ fresh = false, quiet = false } = {}) {
     console.log(`  item master ready: ${c.n} items`);
   } else if (ran || !quiet) {
     say(`  database ready: ${n} items in the master`);
+  }
+
+  // Anyone without a password gets the trial one, so every login in the
+  // trial works on day one. Management replaces them from the Users screen.
+  const [nopass] = await conn.query(
+    'SELECT id FROM users WHERE password_hash IS NULL AND is_active = 1');
+  if (nopass.length) {
+    for (const u of nopass) {
+      await conn.query('UPDATE users SET password_hash = ? WHERE id = ?',
+        [await password.hash(env.trialPassword), u.id]);
+    }
+    say(`  ${nopass.length} login(s) given the trial password "${env.trialPassword}"`);
   }
 
   await conn.end();

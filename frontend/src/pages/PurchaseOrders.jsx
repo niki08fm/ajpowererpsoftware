@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today } from '../api';
+import { api, qty, money, dmy, today, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -237,18 +237,18 @@ export function PurchaseOrderDetail() {
           <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
             <button className="btn" onClick={() => nav('/purchase-orders')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
-            {data.canEdit && <button className="btn pri" onClick={submit}>Send to the GM</button>}
-            {data.canSign && (
+            {data.canEdit && canWrite('/purchase-orders') && <button className="btn pri" onClick={submit}>Send to the GM</button>}
+            {data.canSign && canWrite(`/purchase-orders/${id}/decide`) && (
               <>
                 <button className="btn bad" onClick={() => setSign('RETURNED')}>Send back</button>
                 <button className="btn pri" onClick={() => setSign('APPROVED')}>Sign it</button>
               </>
             )}
-            {data.status === 'APPROVED' && Number(data.pending_qty) > 0 && (
+            {data.status === 'APPROVED' && Number(data.pending_qty) > 0 && canWrite(`/purchase-orders/${id}/receipts`) && (
               <button className="btn pri" onClick={() => setReceiving(true)}>Receive</button>
             )}
             {['DRAFT', 'RETURNED', 'SUBMITTED', 'APPROVED'].includes(data.status)
-              && Number(data.received_qty) === 0 && (
+              && Number(data.received_qty) === 0 && canWrite(`/purchase-orders/${id}/cancel`) && (
               <button className="btn bad" onClick={() => setSign('CANCELLED')}>Cancel</button>
             )}
           </div>

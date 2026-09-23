@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, withBranch } from '../api';
+import { api, qty, dmy, today, withBranch, canWrite } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -469,7 +469,7 @@ export function GrnDetail() {
             <button className="btn" onClick={() => nav(-1)}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
             <button className="btn" onClick={slip}>Print the note</button>
-            {data.canConfirm && <button className="btn pri" onClick={confirm}>Put it on the shelf</button>}
+            {data.canConfirm && canWrite('/grns') && <button className="btn pri" onClick={confirm}>Put it on the shelf</button>}
           </div>
         } />
       <div className="page-body">

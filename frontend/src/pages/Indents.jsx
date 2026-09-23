@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, addDays, withBranch } from '../api';
+import { api, qty, dmy, today, addDays, withBranch, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, useToast,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, Meter, useToast,
 } from '../components/ui';
 
 /** amber inside an agreed ceiling, red where none was agreed */
@@ -50,7 +50,7 @@ export function Indents() {
   return (
     <>
       <PageHead title="Indents" sub="What the site needs, measured against its BOQ"
-        actions={<Link className="btn pri" to="/indents/new">Raise indent</Link>} />
+        actions={canWrite('/indents') && <Link className="btn pri" to="/indents/new">Raise indent</Link>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
         <Banner kind="info" icon="↗">
@@ -499,6 +499,125 @@ function Pipeline({ stage, onOpen }) {
   );
 }
 
+/**
+ * Where every item of an indent has got to, one column per step in the
+ * order the material actually moves:
+ *
+ *   indented → PO raised → received at the store → sent to site
+ *   → on the road → received at site → still pending
+ *
+ * "Sent" is what has left on a challan; "on the road" is the part of
+ * that nobody at site has signed for yet. Material a PO delivered
+ * straight to the site counts as received there without a challan.
+ */
+const FLOW_COLS = [
+  ['indented_qty', 'Indented', 'what the site asked for'],
+  ['ordered_qty', 'PO raised', 'on approved purchase orders'],
+  ['received_qty', 'Received at store', 'taken in on a GRN'],
+  ['issued_qty', 'Sent to site', 'left the store on a challan'],
+  ['in_transit_qty', 'On the road', 'sent, not yet signed for'],
+  ['at_site_qty', 'Received at site', 'signed for at site'],
+  ['to_deliver_qty', 'Pending', 'still to reach the site'],
+];
+
+function ItemStatus({ data }) {
+  const flow = data.flow || [];
+  const sum = (k) => flow.reduce((t, f) => t + Number(f[k] || 0), 0);
+  const n = (v) => Number(v) || 0;
+  const cell = (v) => (n(v) ? qty(v) : <span style={{ color: 'var(--faint)' }}>—</span>);
+  const p = data.pipeline;
+  // before approval nothing can be ordered, so "not ordered" is not news
+  const approved = ['APPROVED', 'CLOSED'].includes(data.status);
+
+  return (
+    <Card title="Item status — from indent to site"
+      sub="How much was asked for, ordered, received at the store, sent, and is still pending — item by item"
+      actions={
+        <button className="btn sm" onClick={() => downloadCsv(`indent-${data.docNo}`, [
+          ['Indent', data.docNo], ['Site', data.site.name], ['Stage', p.stage], [],
+          ['Item code', 'Item', 'Unit', ...FLOW_COLS.map((c) => c[1]), 'With the GM', 'Not ordered yet'],
+          ...flow.map((f) => [f.item_code, f.item_name, f.uom, ...FLOW_COLS.map((c) => f[c[0]]),
+            f.pending_gm_qty, f.to_order_qty]),
+        ])}>Download</button>
+      }>
+      <div className="pad">
+        <Pipeline stage={p.stage} />
+        <div className="stats" style={{ marginTop: 14 }}>
+          {FLOW_COLS.map(([k, label]) => (
+            <Stat key={k} n={qty(p[k])} label={label.toLowerCase()}
+              tone={k === 'to_deliver_qty' ? (n(p[k]) > 0 ? 'bad' : 'ok')
+                : k === 'in_transit_qty' && n(p[k]) > 0 ? 'warn'
+                  : k === 'at_site_qty' ? 'brand' : undefined} />
+          ))}
+        </div>
+      </div>
+
+      <div className="tw">
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 96 }}>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
+              {FLOW_COLS.map(([k, label, hint]) => (
+                <th key={k} className="rt" title={hint}>{label}</th>
+              ))}
+              <th style={{ width: 120 }}>At site</th>
+            </tr>
+          </thead>
+          <tbody>
+            {flow.map((f) => {
+              const pending = n(f.to_deliver_qty);
+              return (
+                <tr key={`${f.item_id}-${f.make_id || ''}`}>
+                  <td className="mono" style={{ color: 'var(--brand-ink)', whiteSpace: 'nowrap' }}>{f.item_code}</td>
+                  <td>{f.item_name}{f.make_name && <small>{f.make_name}</small>}</td>
+                  <td>{f.uom}</td>
+                  <td className="rt mono"><b>{qty(f.indented_qty)}</b></td>
+                  <td className="rt mono">
+                    {cell(f.ordered_qty)}
+                    {n(f.pending_gm_qty) > 0 && (
+                      <small style={{ color: 'var(--warn)' }}>+{qty(f.pending_gm_qty)} with the GM</small>
+                    )}
+                    {approved && n(f.to_order_qty) > 0 && (
+                      <small style={{ color: 'var(--bad)' }}>{qty(f.to_order_qty)} not ordered</small>
+                    )}
+                  </td>
+                  <td className="rt mono">{cell(f.received_qty)}</td>
+                  <td className="rt mono">{cell(f.issued_qty)}</td>
+                  <td className="rt mono" style={{ color: n(f.in_transit_qty) ? 'var(--warn)' : undefined }}>
+                    {cell(f.in_transit_qty)}
+                  </td>
+                  <td className="rt mono">{n(f.at_site_qty) ? <b>{qty(f.at_site_qty)}</b> : cell(0)}</td>
+                  <td className="rt mono" style={{ color: pending > 0 ? 'var(--bad)' : 'var(--ok)' }}>
+                    <b>{pending > 0 ? qty(pending) : 'nil'}</b>
+                  </td>
+                  <td>
+                    <Meter value={n(f.at_site_qty)} max={n(f.indented_qty)} />
+                    <small>{n(f.indented_qty) ? Math.round((n(f.at_site_qty) / n(f.indented_qty)) * 100) : 0}%</small>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          {flow.length > 1 && (
+            <tfoot>
+              <tr>
+                <th colSpan={3} style={{ textAlign: 'left' }}>All items</th>
+                {FLOW_COLS.map(([k]) => (
+                  <th key={k} className="rt mono"
+                    style={k === 'to_deliver_qty' ? { color: sum(k) > 0 ? 'var(--bad)' : 'var(--ok)' } : undefined}>
+                    {k === 'to_deliver_qty' && !sum(k) ? 'nil' : qty(sum(k))}
+                  </th>
+                ))}
+                <th />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export function IndentDetail() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -531,9 +650,9 @@ export function IndentDetail() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={() => nav('/indents')}>Back</button>
-            {data.canEdit && <Link className="btn" to={`/indents/${id}/edit`}>Edit</Link>}
-            {data.canEdit && <button className="btn pri" onClick={submit}>Submit</button>}
-            {data.status === 'SUBMITTED' && (
+            {data.canEdit && canWrite('/indents') && <Link className="btn" to={`/indents/${id}/edit`}>Edit</Link>}
+            {data.canEdit && canWrite('/indents') && <button className="btn pri" onClick={submit}>Submit</button>}
+            {data.status === 'SUBMITTED' && canWrite(`/indents/${id}/decide`) && (
               <>
                 <button className="btn bad" onClick={() => act('RETURNED')}>Return</button>
                 <button className="btn pri" onClick={() => act('APPROVED')}>Approve</button>
@@ -554,79 +673,7 @@ export function IndentDetail() {
           </Banner>
         )}
 
-        {data.pipeline && data.status === 'APPROVED' && (
-          <Card title="Where the material is"
-            sub="Every figure below comes from the orders and deliveries behind it"
-            actions={
-              <button className="btn sm" onClick={() => downloadCsv(`indent-${data.docNo}`, [
-                ['Indent', data.docNo], ['Site', data.site.name],
-                ['Stage', data.pipeline.stage], [],
-                ['Item code', 'Item', 'Unit', 'Indented', 'Ordered', 'With the GM',
-                  'At the store', 'On the road', 'At site', 'Still to reach the site'],
-                ...data.flow.map((f) => [f.item_code, f.item_name, f.uom, f.indented_qty,
-                  f.ordered_qty, f.pending_gm_qty, f.received_qty, f.in_transit_qty,
-                  f.at_site_qty, f.to_deliver_qty]),
-              ])}>Download</button>
-            }>
-            <div className="pad">
-              <Pipeline stage={data.pipeline.stage} />
-              <div className="stats" style={{ marginTop: 14 }}>
-                <Stat n={qty(data.pipeline.indented_qty)} label="indented" />
-                <Stat n={qty(data.pipeline.ordered_qty)} label="ordered" />
-                <Stat n={qty(data.pipeline.received_qty)} label="received at the store" />
-                <Stat n={qty(data.pipeline.in_transit_qty)} label="on the road"
-                  tone={Number(data.pipeline.in_transit_qty) > 0 ? 'warn' : undefined} />
-                <Stat n={qty(data.pipeline.at_site_qty)} label="at site" tone="brand" />
-                <Stat n={qty(data.pipeline.to_deliver_qty)} label="still to reach the site"
-                  tone={Number(data.pipeline.to_deliver_qty) > 0 ? 'warn' : undefined} />
-              </div>
-            </div>
-
-            <div className="tw">
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
-                    <th className="rt">Indented</th><th className="rt">Ordered</th>
-                    <th className="rt">At the store</th><th className="rt">At site</th>
-                    <th className="rt">Still to reach the site</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.flow.map((f) => (
-                    <tr key={`${f.item_id}-${f.make_id || ''}`}>
-                      <td className="mono" style={{ color: 'var(--brand-ink)' }}>{f.item_code}</td>
-                      <td>{f.item_name}{f.make_name && <small>{f.make_name}</small>}</td>
-                      <td>{f.uom}</td>
-                      <td className="rt mono">{qty(f.indented_qty)}</td>
-                      <td className="rt mono">
-                        {Number(f.ordered_qty) ? qty(f.ordered_qty) : '—'}
-                        {Number(f.pending_gm_qty) > 0 && (
-                          <small style={{ color: 'var(--warn)' }}>
-                            {qty(f.pending_gm_qty)} with the GM
-                          </small>
-                        )}
-                      </td>
-                      <td className="rt mono">{Number(f.received_qty) ? qty(f.received_qty) : '—'}</td>
-                      <td className="rt mono">
-                        {Number(f.at_site_qty) ? <b>{qty(f.at_site_qty)}</b> : '—'}
-                        {Number(f.in_transit_qty) > 0 && (
-                          <small style={{ color: 'var(--warn)' }}>
-                            {qty(f.in_transit_qty)} on the road
-                          </small>
-                        )}
-                      </td>
-                      <td className="rt mono"
-                        style={{ color: Number(f.to_deliver_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
-                        <b>{Number(f.to_deliver_qty) ? qty(f.to_deliver_qty) : 'nil'}</b>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
+        {data.pipeline && data.status !== 'DRAFT' && <ItemStatus data={data} />}
 
         {data.orders?.length > 0 && (
           <Card title="Orders raised against it">

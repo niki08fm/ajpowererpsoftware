@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp, PageHead } from '../App';
-import { api, withBranch } from '../api';
+import { api, withBranch, canWrite } from '../api';
 import {
   useApi, Card, Empty, Loading, ErrorNote, Modal, Field, Banner, useToast,
 } from '../components/ui';
@@ -36,7 +36,7 @@ export default function Stores() {
   return (
     <>
       <PageHead title="Stores" sub="Branch warehouses — material lands here and moves out on a challan"
-        actions={<button className="btn pri" onClick={() => setOpen(true)}>New store</button>} />
+        actions={canWrite('/sites/stores') && <button className="btn pri" onClick={() => setOpen(true)}>New store</button>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
         <Banner kind="info" icon="▥">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, addDays, withBranch } from '../api';
+import { api, qty, money, dmy, today, addDays, withBranch, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast,
@@ -108,13 +108,17 @@ export default function Procurement() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <button className="btn" disabled={!picked.length || comparing}
-              onClick={compare}>
-              Compare rates{picked.length ? ` (${picked.length})` : ''}
-            </button>
-            <button className="btn pri" disabled={!picked.length} onClick={() => setBuying(true)}>
-              Raise an order{picked.length ? ` (${picked.length})` : ''}
-            </button>
+            {canWrite('/comparisons') && (
+              <>
+                <button className="btn" disabled={!picked.length || comparing}
+                  onClick={compare}>
+                  Compare rates{picked.length ? ` (${picked.length})` : ''}
+                </button>
+                <button className="btn pri" disabled={!picked.length} onClick={() => setBuying(true)}>
+                  Raise an order{picked.length ? ` (${picked.length})` : ''}
+                </button>
+              </>
+            )}
           </div>
         } />
       <div className="page-body">

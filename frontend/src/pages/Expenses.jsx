@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, money, dmy, today, withBranch } from '../api';
+import { api, money, dmy, today, withBranch, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat,
@@ -258,22 +258,22 @@ function ExpenseCard({ id, onClose, onChanged }) {
         actions={<Outcome outcome={head.outcome} />}
         footer={
           <>
-            {head.status === 'DRAFT' && (
+            {head.status === 'DRAFT' && canWrite('/expenses') && (
               <button className="btn pri" onClick={() => act('submit', 'sent for approval')}>
                 Send for approval
               </button>
             )}
-            {head.status === 'RETURNED' && (
+            {head.status === 'RETURNED' && canWrite('/expenses') && (
               <button className="btn pri" onClick={() => act('submit', 'sent again')}>
                 Send again
               </button>
             )}
-            {canWithdraw && (
+            {canWithdraw && canWrite('/expenses') && (
               <button className="btn" onClick={() => act('withdraw', 'pulled back')}>
                 Pull it back
               </button>
             )}
-            {canDecide && (
+            {canDecide && canWrite(`/expenses/${head.expense_id}/decide`) && (
               <button className="btn pri" onClick={() => setDeciding(true)}>Decide</button>
             )}
           </>
@@ -406,9 +406,11 @@ export default function Expenses() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <button className="btn pri" onClick={() => setClaiming(true)} disabled={!site}>
-              Claim an expense
-            </button>
+            {canWrite('/expenses') && (
+              <button className="btn pri" onClick={() => setClaiming(true)} disabled={!site}>
+                Claim an expense
+              </button>
+            )}
           </div>
         } />
 

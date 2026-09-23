@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy } from '../api';
+import { api, qty, money, dmy, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast,
@@ -40,7 +40,7 @@ export function Comparisons() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <Link className="btn pri" to="/procurement">Start one from an indent</Link>
+            {canWrite('/comparisons') && <Link className="btn pri" to="/procurement">Start one from an indent</Link>}
           </div>
         } />
       <div className="page-body">
@@ -246,10 +246,10 @@ export function ComparisonDetail() {
           <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
             <button className="btn" onClick={() => nav('/comparisons')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
-            {data.canEdit && dirty && (
+            {data.canEdit && dirty && canWrite('/comparisons') && (
               <button className="btn pri" disabled={busy} onClick={saveRates}>Save rates</button>
             )}
-            {data.status === 'DECIDED' && (
+            {data.status === 'DECIDED' && canWrite('/purchase-orders') && (
               <Link className="btn pri" to={`/procurement?comparison=${id}`}>Raise the order</Link>
             )}
           </div>

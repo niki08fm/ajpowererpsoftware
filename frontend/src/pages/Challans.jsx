@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, withBranch } from '../api';
+import { api, qty, dmy, today, withBranch, canWrite } from '../api';
 import { downloadCsv, printDoc } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Meter, useToast,
@@ -109,7 +109,7 @@ export function Challans() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <Link className="btn pri" to="/store/prns">Issue against a PRN</Link>
+            {canWrite('/challans') && <Link className="btn pri" to="/store/prns">Issue against a PRN</Link>}
           </div>
         } />
       <div className="page-body">
@@ -326,8 +326,8 @@ export function ChallanDetail() {
             <button className="btn" onClick={() => nav('/challans')}>Back</button>
             <button className="btn" onClick={grab}>Download</button>
             <button className="btn" onClick={dcSlip}>Print the challan</button>
-            {data.canDispatch && <button className="btn pri" onClick={dispatch}>Dispatch</button>}
-            {data.canAck && (
+            {data.canDispatch && canWrite('/challans') && <button className="btn pri" onClick={dispatch}>Dispatch</button>}
+            {data.canAck && canWrite(`/challans/${id}/acknowledge`) && (
               <button className="btn pri" onClick={() => setAcking(true)}>Acknowledge</button>
             )}
           </div>

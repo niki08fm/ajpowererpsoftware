@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PageHead } from '../App';
+import { PageHead, useApp } from '../App';
 import { api, qty, dmy, today } from '../api';
 import {
   useApi, useToast, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat,
@@ -277,6 +277,7 @@ function problems(rows, capKey, capWord) {
    =================================================================== */
 export function IssueStock() {
   const { siteId } = useSite();
+  const { access, allSites } = useApp();
   const toast = useToast();
   const [head, setHead] = useState({ usedOn: today(), issuedTo: '', purpose: '', note: '' });
   const [rows, setRows] = useState([]);
@@ -324,6 +325,25 @@ export function IssueStock() {
       setSaving(false);
     }
   };
+
+  // only the site's store keeper hands out its material; the server
+  // refuses anyone else, so say so here rather than after the form
+  if (!(access?.keeperOf || []).includes(Number(siteId))) {
+    const site = (allSites || []).find((x) => x.id === Number(siteId));
+    return (
+      <>
+        <PageHead title="Issue for consumption"
+          sub="Material leaving the site store in someone's hands" />
+        <div className="page-body">
+          <Banner kind="warn" icon="!">
+            Only the store keeper of {site?.name || 'this site'}
+            {site?.keeper ? <> — <b>{site.keeper.name}</b> —</> : ''} can issue its material.
+            You can still see what was issued under Site › Transactions.
+          </Banner>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

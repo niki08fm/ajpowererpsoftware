@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, addDays, withBranch } from '../api';
+import { api, qty, money, dmy, today, addDays, withBranch, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
@@ -41,7 +41,7 @@ export function StoreDesk() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <Link className="btn" to="/store/prns">PRNs to fulfil</Link>
-            <Link className="btn pri" to="/grns">Acknowledge a delivery</Link>
+            {canWrite('/grns') && <Link className="btn pri" to="/grns">Acknowledge a delivery</Link>}
           </div>
         } />
       <div className="page-body">
@@ -254,9 +254,11 @@ export function Prns() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <button className="btn pri" onClick={issue} disabled={!chosen.length}>
-              {chosen.length ? `Issue against ${chosen.length}` : 'Issue'}
-            </button>
+            {canWrite('/challans') && (
+              <button className="btn pri" onClick={issue} disabled={!chosen.length}>
+                {chosen.length ? `Issue against ${chosen.length}` : 'Issue'}
+              </button>
+            )}
           </div>
         } />
       <div className="page-body">

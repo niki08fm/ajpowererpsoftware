@@ -35,8 +35,31 @@ npm run dev
 
 Open **http://localhost:5173**.
 
-That's it. There's no login — pick who you're working as from the top
-bar; it only decides whose name goes on a document.
+Sign in. On first start everyone is given the trial password
+**`ajpower@123`** (set `TRIAL_PASSWORD` in `backend/.env` to change it);
+Management changes it per person from **Logins › Users & access**, and
+anyone can change their own from the top bar.
+
+## Logins and what each one sees
+
+| Login | Email | Sees |
+|---|---|---|
+| Management | anil@, deepak@ | Every department and project, **view only**. Signs the second level. Makes logins and gives access. |
+| General Manager | kavya@ | The same, but only the projects they are GM of. Signs the first level. |
+| Planning | suresh@ | Sites, BOQs, clients, stores, item master. |
+| Site | ravi@, vikram@ | Their own sites: indents, acknowledgements, site store, expenses, transfers. **Issue material only as the site's store keeper.** |
+| Store | imran@ | PRNs, GRNs, challans, stock, movement. |
+| Procurement | prakash@ | To buy, rate comparisons, orders, suppliers. |
+| Billing | lakshmi@ | Bills for each site. |
+
+All emails are `@ajpower.test`. A GM or Site login sees nothing until
+Management gives it sites under **Users & access › Sites**: a GM is
+made GM of projects; a Site person is put on a site's team or made its
+store keeper.
+
+The server enforces the same lines (`backend/src/lib/access.js`): a
+write the role may not make is refused, a site the person is not on is
+refused, and lists sent to a GM or Site login drop other sites' rows.
 
 ## If MySQL isn't root with no password
 
@@ -54,7 +77,7 @@ Everything else has a working default.
 ```bash
 cd backend
 npm run db:reset     # DROPS your database and rebuilds it empty
-npm test             # 229 tests
+npm test             # 257 tests
 ```
 
 `npm test` builds and uses its own database, `ajp_erp_test`. It deletes
@@ -67,6 +90,38 @@ working data is never touched.
 in your `.env`.
 
 ## What's in it
+
+**My desk** is the first tab of every department: the counts that need
+someone, the documents behind them with anything past its date first,
+the actions people start most often, and a trend of the last twelve
+weeks or six months. Late means past a date somebody was promised — a
+PRN's needed-by, a supplier's expected date — or sitting too long with
+whoever has to act. Site and store desks count documents rather than
+rupees; the money departments get their trends in money.
+
+**Approvals** is a department of its own: everything waiting on the
+person signed in, oldest on their desk first. A PRN or an
+expense claim goes to the GM of the site that raised it, a purchase
+order to Management, a transfer request to the head of the site asked
+to send. Nothing else is shown to anyone. Each decision is the
+document's own — the same call its own screen makes — so its history
+records it exactly as if it had been decided there.
+
+**Choosing where you work.** The Site department opens on a page of
+cards — every open site, in every branch, grouped by branch — and
+everything inside it is answered for the one you pick. The Store
+department does the same with stores. Neither asks for a branch: it
+follows from the site or store chosen, and the top bar offers the site
+or store instead, with a switch back to the cards. A remembered choice
+that has since closed is dropped, so you land on the cards rather than
+on a dead page.
+
+Everywhere else the branch picker decides, and it can be set to **All
+branches**. Creating something still needs one branch, so New site and
+Create store ask for it when you are viewing all, and a rate comparison
+takes its branch from the indents on it — and refuses indents from two
+branches on one sheet. Branches are Hyderabad, Bengaluru and Pune
+(Pune's GSTIN is still to be filled in).
 
 **Planning** — sites, clients, stores, the site team, work orders (with
 the client's spreadsheet droppable straight in), and the BOQ.
@@ -124,9 +179,7 @@ being placed, each line shows what the central store is already holding
 that item at and what was last paid for it anywhere, so a buyer is
 never typing into a vacuum.
 
-Note this is a matter of which screens show what, not a permission
-check: there is no login yet, so anyone may open Procure. Real
-enforcement waits on authentication.
+Only Procurement may act here; Management and the GM see it view only.
 
 The **item master** sits under Planning, which reads it, and under
 Store, which is the only department that adds to it — the storekeeper

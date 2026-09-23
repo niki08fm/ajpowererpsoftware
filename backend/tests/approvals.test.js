@@ -8,6 +8,8 @@
  * it in the decider's history.
  */
 process.env.DB_NAME = process.env.DB_NAME_TEST || 'ajp_erp_test';
+// these suites test the documents, not the door: act by X-User-Id
+process.env.AUTH = 'off';
 
 const { test, before, after, describe } = require('node:test');
 const assert = require('node:assert');

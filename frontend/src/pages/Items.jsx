@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PageHead } from '../App';
-import { api, qty } from '../api';
+import { api, qty, canWrite } from '../api';
 import {
   useApi, Card, Field, Tag, Empty, Loading, ErrorNote, Banner, Modal, useToast,
 } from '../components/ui';
@@ -45,7 +45,7 @@ export default function Items() {
   return (
     <>
       <PageHead title="Item master" sub="Codes are the company's own — nobody types them"
-        actions={<button className="btn pri" onClick={() => setAdding(true)}>Add an item</button>} />
+        actions={canWrite('/items') && <button className="btn pri" onClick={() => setAdding(true)}>Add an item</button>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
         <Banner kind="info" icon="◆">

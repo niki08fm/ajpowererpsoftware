@@ -1,7 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { api, setUserId, getUserId } from './api';
-import { ToastHost, Loading, ErrorNote, useApi } from './components/ui';
+import { api, setToken, getToken, whenSignedOut, setWrites } from './api';
+import { ToastHost, Loading, ErrorNote, Field, Modal, useToast } from './components/ui';
 import { Chooser } from './pages/Choose';
 import { Approvals, Decided } from './pages/Approvals';
 
@@ -29,6 +29,8 @@ import Indents from './pages/Indents';
 import { SiteTransfers, SentAndReorder, SourceFromSitePage, StoreTransfers } from './pages/Transfers';
 import IndentCart from './pages/IndentCart';
 import IndentDetail from './pages/IndentDetail';
+import Login from './pages/Login';
+import Users from './pages/Users';
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx);
@@ -101,12 +103,16 @@ export const SECTIONS = [
     icon: '▥',
     screens: [
       { to: '/store/prns', label: 'PRNs to fulfil' },
-      { to: '/grns', label: 'Receive (GRN)' },
+      { to: '/grns', label: 'Receive (GRN)', end: true },
+      { to: '/grns/register', label: 'GRN register', more: true },
       { to: '/challans', label: 'Challans' },
       { to: '/stock', label: 'Stock' },
       { to: '/store/transfers', label: 'Transfer requests', more: true },
       { to: '/movements', label: 'Movement', more: true },
       { to: '/items', label: 'Item master', more: true },
+      // reached from a PRN, never from the menu
+      { to: '/store/issue', label: 'Issue sheet', hidden: true },
+      { to: '/store/source', label: 'Source from a site', hidden: true },
     ],
   },
   {
@@ -138,7 +144,81 @@ export const SECTIONS = [
       { to: '/reports/pl', label: 'Profit and loss' },
     ],
   },
+  {
+    id: 'admin',
+    label: 'Logins',
+    icon: '⚿',
+    screens: [
+      { to: '/admin/users', label: 'Users & access' },
+    ],
+  },
 ];
+
+/**
+ * What each login is shown.
+ *
+ * A department sees its own department, all of it. Management and the
+ * General Manager oversee: every department, but the screens that show
+ * the work rather than the ones that do it — nobody overseeing raises
+ * an indent or issues material. The server holds the same line
+ * (backend/src/lib/access.js); this only decides what is drawn.
+ *
+ * `all` is every screen of the section; a list names the ones shown.
+ */
+const OVERSEE = {
+  approvals: 'all',
+  plan: ['/sites', '/boq', '/clients'],
+  site: ['/indents', '/site/inbox', '/site/stock', '/site/expenses', '/site/transactions',
+    '/site/consumption', '/site/audit', '/site/sent'],
+  // '/grns' itself is the receiving form; it is here so a GRN opened
+  // from the register still has somewhere to belong
+  store: ['/store/prns', '/grns', '/grns/register', '/challans', '/stock', '/movements',
+    '/store/transfers'],
+  procure: 'all',
+  billing: 'all',
+  reports: 'all',
+};
+const MENU = {
+  Management: { ...OVERSEE, admin: 'all' },
+  'General Manager': OVERSEE,
+  Planning: { plan: 'all' },
+  // the site answers transfer requests from its Approvals
+  Site: { approvals: 'all', site: 'all' },
+  Store: { store: 'all' },
+  Procurement: { procure: 'all' },
+  Billing: { billing: 'all' },
+};
+// open to an overseer by path, but they are forms for doing the work
+const DOING = [/^\/indents\/new/, /\/edit$/, /^\/sites\/new/, /^\/site\/(issue|returns|transfers)/,
+  /^\/store\/(issue|source)/, /^\/grns$/];
+
+export function menuFor(access) {
+  const pick = MENU[access?.role] || {};
+  return SECTIONS.filter((sec) => pick[sec.id]).map((sec) => {
+    const want = pick[sec.id];
+    let screens = want === 'all' ? sec.screens : sec.screens.filter((x) => want.includes(x.to));
+    // chosen for an overseer: nothing hides behind More, and a form for
+    // doing the work stays off the menu
+    if (want !== 'all') {
+      screens = screens.map((x) => ({ ...x, more: false,
+        hidden: x.hidden || DOING.some((re) => re.test(x.to)) }));
+    }
+    // issuing is the store keeper's, so only a keeper is offered it
+    if (sec.id === 'site' && !(access.keeperOf || []).length) {
+      screens = screens.filter((x) => x.to !== '/site/issue');
+    }
+    return { ...sec, screens };
+  });
+}
+
+/** May this login open this path at all? */
+const reachable = (sections, access, pathname) => {
+  // these only redirect to the login's first screen
+  if (pathname === '/' || pathname.startsWith('/desk/')) return true;
+  if (access?.overseer && DOING.some((re) => re.test(pathname))) return false;
+  return sections.some((sec) => sec.screens.some((x) => pathname === x.to
+    || pathname.startsWith(`${x.to}/`) || (!x.end && pathname.startsWith(x.to))));
+};
 
 export const SOON = [
   { id: 'accounts', label: 'Accounts', icon: '◎' },
@@ -153,11 +233,11 @@ export const SOON = [
  * a link can say which department it was clicked from, and that wins
  * over the path when it is a department the screen really lives in.
  */
-const sectionFor = (pathname, from) =>
-  (from && SECTIONS.find((s) => s.id === from
+const sectionFor = (sections, pathname, from) =>
+  (from && sections.find((s) => s.id === from
     && s.screens.some((x) => pathname.startsWith(x.to))))
-  || SECTIONS.find((s) => s.screens.some((x) => pathname.startsWith(x.to)))
-  || SECTIONS[0];
+  || sections.find((s) => s.screens.some((x) => pathname.startsWith(x.to)))
+  || sections[0];
 
 const screenFor = (section, pathname) =>
   [...section.screens].sort((a, b) => b.to.length - a.to.length)
@@ -178,8 +258,9 @@ const useTheme = () => {
 /** One department in the sidebar: the heading, its options, and More. */
 function NavGroup({ section, active, open, onToggle, counts, mini }) {
   const [showMore, setShowMore] = useState(false);
-  const daily = section.screens.filter((x) => !x.more);
-  const rest = section.screens.filter((x) => x.more);
+  const listed = section.screens.filter((x) => !x.hidden);
+  const daily = listed.filter((x) => !x.more);
+  const rest = listed.filter((x) => x.more);
   const total = section.screens.reduce((a, x) => a + (x.badge ? counts[x.badge] || 0 : 0), 0);
   // an option behind More that is the one you are on must still show
   const shown = [...daily, ...(showMore ? rest : rest.filter((x) => active && x.to === active.to))];
@@ -217,7 +298,7 @@ function NavGroup({ section, active, open, onToggle, counts, mini }) {
       {/* collapsed: everything, on hover, without expanding the sidebar */}
       <div className="flyout">
         <h4>{section.label}</h4>
-        {section.screens.map((x) => item(x))}
+        {listed.map((x) => item(x))}
       </div>
     </div>
   );
@@ -227,10 +308,11 @@ function Shell({ children }) {
   const outer = useApp();
   const {
     branches, branchSel, setBranch, allStores, storeId, setStore,
-    allSites, siteId, setSite, users, me, desk, approvalsWaiting,
+    allSites, siteId, setSite, user, access, sections, signOut, desk, approvalsWaiting,
   } = outer;
   const { pathname, state } = useLocation();
-  const section = sectionFor(pathname, state?.dept);
+  const section = sectionFor(sections, pathname, state?.dept);
+  const [pwOpen, setPwOpen] = useState(false);
   const screen = screenFor(section, pathname);
   const [dark, setDark] = useTheme();
 
@@ -294,7 +376,7 @@ function Shell({ children }) {
         </div>
 
         <div className="nav-scroll">
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <NavGroup key={s.id} section={s} mini={mini}
               active={s.id === section.id ? (screen || s.screens[0]) : null}
               open={openId === s.id}
@@ -302,7 +384,7 @@ function Shell({ children }) {
               counts={counts} />
           ))}
 
-          {SOON.map((d) => (
+          {access.overseer && SOON.map((d) => (
             <div key={d.id} className="nav-group">
               <div className="nav-sec soon" title={`${d.label} — not built yet`}>
                 <i aria-hidden="true">{d.icon}</i>
@@ -327,6 +409,9 @@ function Shell({ children }) {
           <div className="crumb">
             <b>{section.label}</b>
             {screen && <span>{'›'} {screen.label}</span>}
+            {access.overseer && !['approvals', 'admin'].includes(section.id) && (
+              <span className="tag brand" title="You oversee this department; its own team does the work">View only</span>
+            )}
           </div>
           <span className="sp" />
           {section.id === 'site' && site && (
@@ -379,17 +464,20 @@ function Shell({ children }) {
               </select>
             </>
           )}
-          {/* No login yet — this only decides whose name goes on a document. */}
-          <label className="who" htmlFor="who">Working as</label>
-          <select id="who" value={me?.id || ''}
-            onChange={(e) => { setUserId(Number(e.target.value)); window.location.reload(); }}>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.name} · {u.department}</option>)}
-          </select>
+          <div className="me" title={user.email}>
+            <b>{user.name}</b>
+            <span>{user.department}</span>
+          </div>
+          <button type="button" className="top-btn" onClick={() => setPwOpen(true)}>Password</button>
+          <button type="button" className="top-btn" onClick={signOut}>Sign out</button>
         </header>
+        {pwOpen && <PasswordForm onClose={() => setPwOpen(false)} />}
 
         <div className="page">
           <AppCtx.Provider value={inner}>
-            {choosing
+            {!reachable(sections, access, pathname)
+              ? <NotYours home={sections[0]?.screens[0]?.to || '/'} />
+              : choosing
               ? <Chooser kind={section.id} sites={allSites} stores={allStores} branches={branches}
                   onPick={(id) => (section.id === 'site' ? setSite(id) : setStore(id))} />
               : children}
@@ -408,7 +496,95 @@ export const PageHead = ({ title, sub, actions }) => (
   </div>
 );
 
+/** Somewhere this login does not go. */
+function NotYours({ home }) {
+  return (
+    <div className="page-body">
+      <div className="empty">
+        <b>Not part of your login</b>
+        This screen belongs to another department.{' '}
+        <NavLinkHome to={home} />
+      </div>
+    </div>
+  );
+}
+const NavLinkHome = ({ to }) => <NavLink to={to}>Go to your first screen</NavLink>;
+
+/** Change your own password. */
+function PasswordForm({ onClose }) {
+  const toast = useToast();
+  const [f, setF] = useState({ current: '', next: '', again: '' });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (f.next.length < 8) return toast('At least 8 characters', 'bad');
+    if (f.next !== f.again) return toast('The two new passwords are not the same', 'bad');
+    setBusy(true);
+    try {
+      await api.post('/auth/password', { current: f.current, next: f.next });
+      toast('Password changed — other sessions are signed out', 'ok');
+      onClose();
+    } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
+  const inp = (k, label) => (
+    <Field label={label}>
+      <input className="inp" type="password" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
+    </Field>
+  );
+  return (
+    <Modal title="Change your password" onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn pri" onClick={save} disabled={busy || !f.current || !f.next}>Change it</button>
+      </>}>
+      {inp('current', 'Current password')}
+      {inp('next', 'New password')}
+      {inp('again', 'New password again')}
+    </Modal>
+  );
+}
+
+/**
+ * Signed in, or not. Everything else waits on this: until the server
+ * has said who this is and what they may do, there is nothing to draw.
+ */
 export default function App() {
+  const [auth, setAuth] = useState(() => (getToken() ? { checking: true } : { out: true }));
+
+  const signedIn = useCallback(({ user, access }) => {
+    setWrites(access.writes);
+    setAuth({ user, access });
+  }, []);
+
+  useEffect(() => {
+    whenSignedOut(() => setAuth({ out: true, ended: true }));
+    if (!getToken()) return;
+    api.get('/auth/me').then(signedIn)
+      .catch((e) => setAuth(e.status === 401 ? { out: true, ended: true } : { out: true, error: e }));
+  }, [signedIn]);
+
+  const signOut = useCallback(() => {
+    api.post('/auth/logout').catch(() => {}).finally(() => {
+      setToken(null);
+      setWrites([]);
+      setAuth({ out: true });
+    });
+  }, []);
+
+  if (auth.checking) return <Loading />;
+  if (auth.out) {
+    return (
+      <ToastHost>
+        <Login ended={auth.ended} onSignedIn={signedIn} />
+      </ToastHost>
+    );
+  }
+  // a fresh App per person, so nothing of the last login's state survives
+  return <Workspace key={auth.user.id} user={auth.user} access={auth.access} signOut={signOut} />;
+}
+
+function Workspace({ user, access, signOut }) {
+  const sections = menuFor(access);
+  const home = sections[0]?.screens[0]?.to || '/approvals';
   const [boot, setBoot] = useState({ loading: true });
   // the branch picker: a branch id, or 'ALL'. Remembered.
   const [branchSel, setBranchSel] = useState(() => {
@@ -429,10 +605,9 @@ export default function App() {
   useEffect(refreshApprovals, [refreshApprovals]);
 
   useEffect(() => {
-    Promise.all([api.get('/masters/branches'), api.get('/users'), api.get('/whoami')])
-      .then(([branches, users, me]) => {
-        if (!getUserId() && me?.id) setUserId(me.id);
-        setBoot({ loading: false, branches, users, me });
+    Promise.all([api.get('/masters/branches'), api.get('/users')])
+      .then(([branches, users]) => {
+        setBoot({ loading: false, branches, users, me: user });
         setBranchSel((b) => b || branches[0]?.id || null);
       })
       .catch((error) => setBoot({ loading: false, error }));
@@ -445,11 +620,14 @@ export default function App() {
   const loadPlaces = useCallback(() => {
     api.get('/sites').then((rows) => {
       setAllSites(rows);
-      setSiteId((cur) => (rows.some((r) => r.id === cur) ? cur : null));
+      // somebody on exactly one site has nothing to choose
+      setSiteId((cur) => (rows.some((r) => r.id === cur) ? cur
+        : rows.length === 1 ? rows[0].id : null));
     }).catch(() => setAllSites([]));
     api.get('/store/stores').then((rows) => {
       setAllStores(rows);
-      setStoreId((cur) => (rows.some((r) => r.id === cur) ? cur : null));
+      setStoreId((cur) => (rows.some((r) => r.id === cur) ? cur
+        : rows.length === 1 ? rows[0].id : null));
     }).catch(() => setAllStores([]));
   }, []);
   useEffect(loadPlaces, [loadPlaces]);
@@ -491,19 +669,20 @@ export default function App() {
       storeId, setStore, siteId, setSite,
       allStores, allSites, stores: allStores, loadPlaces,
       desk, refreshDesk, approvalsWaiting, refreshApprovals,
+      user, access, sections, signOut,
     }}>
       <ToastHost>
         <BrowserRouter>
           <Shell>
             <Routes>
-              <Route path="/" element={<Navigate to="/approvals" replace />} />
+              <Route path="/" element={<Navigate to={home} replace />} />
               {/* The department overview desks are parked, not deleted:
                   pages/Desk.jsx and the /desk API are still here, and
                   bringing them back is this route and one nav row each.
                   Approvals is the landing screen while they are away. */}
               {['plan', 'site', 'store', 'procure', 'billing', 'reports'].map((d) => (
                 <Route key={d} path={`/desk/${d}`}
-                  element={<Navigate to="/approvals" replace />} />
+                  element={<Navigate to={home} replace />} />
               ))}
               <Route path="/approvals" element={<Approvals />} />
               <Route path="/approvals/decided" element={<Decided />} />
@@ -559,6 +738,7 @@ export default function App() {
               <Route path="/indents/new" element={<IndentCart />} />
               <Route path="/indents/:id" element={<IndentDetail />} />
               <Route path="/indents/:id/edit" element={<IndentCart />} />
+              <Route path="/admin/users" element={<Users />} />
               <Route path="*" element={<div className="page-body"><p>No such page.</p></div>} />
             </Routes>
           </Shell>

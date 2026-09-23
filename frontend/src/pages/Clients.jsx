@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api } from '../api';
+import { api, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Field, Tag, Empty, Loading, ErrorNote, Banner, Modal, Stat, useToast,
@@ -49,7 +49,7 @@ export default function Clients() {
         actions={
           <>
             {rows.length ? <button className="btn" onClick={grab}>Download</button> : null}
-            <button className="btn pri" onClick={() => setEditing({})}>Add a client</button>
+            {canWrite('/masters/clients') && <button className="btn pri" onClick={() => setEditing({})}>Add a client</button>}
           </>
         } />
       <div className="page-body">

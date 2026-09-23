@@ -1,9 +1,9 @@
 /**
  * The one place that talks to the API.
  *
- * There is no login yet, so the "working as" user is a header. When
- * authentication arrives this file gains a token and nothing else
- * changes.
+ * Every request carries the session token handed out at sign-in. A 401
+ * means the session is over — expired, signed out elsewhere, or the
+ * login was switched off — and the app goes back to the sign-in screen.
  */
 const BASE = '/api';
 
@@ -16,16 +16,40 @@ export class ApiError extends Error {
   }
 }
 
-let userId = Number(localStorage.getItem('ajp.userId')) || null;
-export const setUserId = (id) => {
-  userId = id;
-  localStorage.setItem('ajp.userId', String(id));
+const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const write = (k, v) => {
+  try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* private window */ }
 };
-export const getUserId = () => userId;
+
+let token = read('ajp.token');
+export const setToken = (t) => { token = t || null; write('ajp.token', token); };
+export const getToken = () => token;
+
+// App sets this, so a dead session anywhere lands on the sign-in screen
+let onSignedOut = () => {};
+export const whenSignedOut = (fn) => { onSignedOut = fn; };
+
+// the server's write rules, in order, each with whether this login
+// passes it (lib/access.js). The first rule that matches decides.
+let writes = [];
+export const setWrites = (list) => {
+  writes = (list || []).map(([src, ok]) => [new RegExp(src), ok]);
+};
+/** Would the server let this login make this write? */
+export const canWrite = (path) => {
+  const rule = writes.find(([re]) => re.test(path.split('?')[0]));
+  return !!rule && rule[1];
+};
 
 async function request(path, { method = 'GET', body, raw } = {}) {
+  // a view-only login is told here, before the round trip, rather than
+  // by a refusal after it
+  if (method !== 'GET' && !path.startsWith('/auth/') && !canWrite(path)) {
+    throw new ApiError(403, { error: { code: 'FORBIDDEN',
+      message: 'Your login can only view this — the department that owns it does this step' } });
+  }
   const headers = {};
-  if (userId) headers['X-User-Id'] = String(userId);
+  if (token) headers.Authorization = `Bearer ${token}`;
   if (body && !raw) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(BASE + path, {
@@ -35,6 +59,10 @@ async function request(path, { method = 'GET', body, raw } = {}) {
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
+  if (res.status === 401 && !path.startsWith('/auth/login')) {
+    setToken(null);
+    onSignedOut();
+  }
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
 }

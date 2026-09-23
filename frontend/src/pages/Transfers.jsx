@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today } from '../api';
+import { api, qty, dmy, today, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast,
@@ -431,13 +431,13 @@ function RequestDetail({ id, onClose, onChanged }) {
       footer={
         <>
           <button className="btn" onClick={onClose}>Close</button>
-          {data.state === 'AWAITING' && (
+          {data.state === 'AWAITING' && canWrite(`/transfers/${id}/decide`) && (
             <>
               <button className="btn bad" disabled={busy} onClick={() => decide('REJECTED')}>Refuse</button>
               <button className="btn pri" disabled={busy} onClick={() => decide('ACCEPTED')}>Accept</button>
             </>
           )}
-          {['TO_SEND', 'PART_SENT'].includes(data.state) && (
+          {['TO_SEND', 'PART_SENT'].includes(data.state) && canWrite('/challans') && (
             <button className="btn pri" onClick={() => setSending(true)}>Send it</button>
           )}
         </>
@@ -633,6 +633,7 @@ export function SentAndReorder() {
           <>
             {hist.data?.docs.length ? <button className="btn" onClick={grab}>Download</button> : null}
             <button className="btn pri" disabled={!siteId || toReorder <= 0}
+              hidden={!canWrite(`/transfers/site/${siteId}/reorder`)}
               onClick={() => setReordering(true)}>
               Reorder issued stock
             </button>

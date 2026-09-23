@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, withBranch } from '../api';
+import { api, qty, money, dmy, today, withBranch, canWrite } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter,
@@ -597,10 +597,10 @@ export function BillCard({ id, onClose, onChanged }) {
         footer={
           <>
             <button className="btn" onClick={grab}>Download</button>
-            {canCancel && (
+            {canCancel && canWrite('/bills') && (
               <button className="btn bad" onClick={() => setCancelling(true)}>Cancel it</button>
             )}
-            {canRaise && (
+            {canRaise && canWrite('/bills') && (
               <button className="btn pri"
                 onClick={() => act(() => api.post(`/bills/${head.bill_id}/raise`), 'raised')}>
                 Raise it
@@ -733,7 +733,7 @@ export function Bills() {
   return (
     <>
       <PageHead title="Bills" sub="Every running account bill in this branch"
-        actions={<Link className="btn pri" to="/billing">Bill a site</Link>} />
+        actions={canWrite('/bills') && <Link className="btn pri" to="/billing">Bill a site</Link>} />
 
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}

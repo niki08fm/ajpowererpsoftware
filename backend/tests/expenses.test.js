@@ -7,6 +7,8 @@
  * from 4,000 to 3,200 must reach it as 3,200.
  */
 process.env.DB_NAME = process.env.DB_NAME_TEST || 'ajp_erp_test';
+// these suites test the documents, not the door: act by X-User-Id
+process.env.AUTH = 'off';
 
 const { test, before, after, describe } = require('node:test');
 const assert = require('node:assert');

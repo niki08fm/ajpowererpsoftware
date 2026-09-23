@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { useApi, Card, Tag, Empty, Loading, ErrorNote, Meter } from '../components/ui';
-import { money, dmy, withBranch } from '../api';
+import { money, dmy, withBranch, canWrite } from '../api';
 
 /** What a site's BOQ is doing, in one chip. */
 function BoqCell({ site }) {
@@ -30,7 +30,7 @@ export default function Sites() {
       <PageHead
         title="Sites"
         sub="Every project — its client, its team, and the work order it runs on"
-        actions={<Link className="btn pri" to="/sites/new">New site</Link>}
+        actions={canWrite('/sites') && <Link className="btn pri" to="/sites/new">New site</Link>}
       />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}

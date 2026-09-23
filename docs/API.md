@@ -11,10 +11,21 @@ duplicate item name reads "Already in the master as WIR-0052", not
 "ER_DUP_ENTRY".
 
 ## Who
+Every endpoint except `POST /auth/login` needs `Authorization: Bearer <token>`.
+What a role may write is in `backend/src/lib/access.js`; anything else is a 403.
+
 | | |
 |---|---|
+| `POST /auth/login` | `{email, password}` → `{token, user, access}` |
+| `POST /auth/logout` | ends this session |
+| `GET /auth/me` | `{user, access: {role, overseer, siteIds, keeperOf, writes}}` |
+| `POST /auth/password` | `{current, next}` — change your own |
 | `GET /whoami` | the caller |
-| `GET /users` | everyone, for a "working as" switcher |
+| `GET /users` | everyone, for pickers (GM, store keeper) |
+| `GET /admin/users` | Management: every login, role and sites |
+| `POST /admin/users` | Management: `{name, email, department, password, phone?, empCode?}` |
+| `PATCH /admin/users/:id` | Management: any of those, plus `isActive` |
+| `PUT /admin/users/:id/sites` | Management: `{sites: [{siteId, as: GM\|TEAM\|KEEPER}]}` |
 
 ## Masters
 `GET /masters/branches` · `/uoms` · `/categories` · `/makes`
@@ -939,3 +950,44 @@ This matters because a client filed under the wrong branch is otherwise
 stranded — invisible in the site form's picker and reachable from
 nowhere else. The Clients screen under Planning lists every client
 across every branch, which is where such a one is found and put right.
+
+
+## All branches
+
+A missing `branchId` means **every branch**. Every list endpoint the app
+calls accepts that, and `GET /store/stores` now does too (each row
+carries `branch_id` and `branch_name`, for the store chooser).
+
+`POST /comparisons` takes `branchId` as optional when `indentIds` are
+given: the branch comes from the indents, and indents from two branches
+are refused (`400`) — one comparison is one branch. With no indents, a
+`branchId` is still required.
+
+Creating a site or a store always needs a `branchId`.
+
+
+## Approvals
+
+| | |
+|---|---|
+| `GET /approvals?type=` | what is waiting on the Working-as person, oldest on their desk first |
+| `GET /approvals/count` | the rail badge |
+| `GET /approvals/decided?days=` | what that person has decided, read from each document's own events |
+
+Strictly routed: PRN and expense claim → the GM of the raising site;
+purchase order → users in Management; transfer request → the head of
+the site asked to send. `daysWaiting` is measured by the database from
+the moment the document reached the approver (submitted, or raised for
+a transfer). Decisions are made on the documents' own endpoints —
+`/indents/:id/decide`, `/purchase-orders/:id/decide`,
+`/expenses/:id/decide`, `/transfers/:id/decide`; there is no second
+approval record.
+
+## My desk
+
+`GET /desk/:dept` for `plan`, `procure`, `billing`, `reports`
+(`branchId` optional, absent = every branch), `site` (`siteId`
+required) and `store` (`storeId` required). Returns `tiles`, `needs`
+(worst first: `severity`, `late` days, `to` a screen) and `trends`
+(gap-free weekly or monthly `series`, `lines`, `unit` count or money).
+The site and store desks never carry money.

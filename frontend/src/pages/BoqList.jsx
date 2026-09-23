@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { AmendSheet, BoqHistory } from './BoqAmend';
-import { api, qty, withBranch } from '../api';
+import { api, qty, withBranch, canWrite } from '../api';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Meter, Modal, Field,
   ItemPicker, useToast, Banner, Stat,
@@ -102,7 +102,7 @@ export function BoqList() {
                         </td>
                         <td className="rt" onClick={(e) => e.stopPropagation()}>
                           <button className="btn sm" onClick={() => setHistoryId(b.id)}>History</button>{' '}
-                          {b.status === 'LOCKED' && (
+                          {b.status === 'LOCKED' && canWrite(`/boq/${b.id}/amendments`) && (
                             <button className={`btn sm ${b.state === 'AMENDMENT_DUE' ? 'pri' : ''}`}
                               onClick={() => setAmendId(b.id)}>Amend</button>
                           )}
@@ -286,7 +286,7 @@ export function BoqSheet({ boqId, onClose }) {
         title={locked ? data.docNo : `Prepare ${data.docNo}`}
         sub={`${data.site.name} · ${data.client || ''} · against ${data.workOrder.clientWoNo || data.workOrder.docNo}`}
         onClose={onClose}
-        actions={!locked && (
+        actions={!locked && canWrite(`/boq/${id}/submit`) && (
           <button className="btn pri" disabled={!allDone} onClick={() => setSubmitOpen(true)}>
             Submit BOQ
           </button>

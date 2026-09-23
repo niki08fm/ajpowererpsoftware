@@ -2,9 +2,20 @@
 const router = require('express').Router();
 const { currentUser, listUsers } = require('../middleware/currentUser');
 const { wrap } = require('../middleware/validate');
+const env = require('../config/env');
+const access = require('../lib/access');
+const { publicAuth, signedInAuth } = require('../modules/auth.routes');
 
-// no login yet — this only decides whose name goes on a document
+// the one door that opens without a session
+router.use('/auth', publicAuth);
+
+// everything after this knows who is asking, and — with logins on —
+// what their role lets them see and do (lib/access.js)
 router.use(currentUser);
+if (env.auth) router.use(access.enforce);
+
+router.use('/auth', signedInAuth);
+router.use('/admin', require('../modules/admin.routes'));
 
 router.get('/whoami', (req, res) => res.json(req.user));
 router.get('/users', wrap(async (_req, res) => res.json(await listUsers())));
