@@ -594,7 +594,7 @@ select.inp {
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985); } }
 .modal.wide { max-width: 900px; }
 .modal.full { max-width: 1240px; width: 96vw; height: 92vh; }
-.modal.full .body { padding: 0; }
+.modal.full > .body { padding: 0; }
 .modal > header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
 .modal > header .sp { flex: 1; }
 .modal > header h3 { font-size: 16.5px; }

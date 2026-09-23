@@ -743,7 +743,7 @@ function ViewPrn({ id }) {
   );
 }
 
-function PrnPeek({ id, onClose }) {
+export function PrnPeek({ id, onClose }) {
   const { data, error, loading } = useApi(`/indents/${id}`, [id]);
   const [view, setView] = useState('items');
   // the whole BOQ, only when asked for
@@ -753,9 +753,12 @@ function PrnPeek({ id, onClose }) {
   // one row per item, with the BOQ lines it was asked on (1a-15, 2a-5)
   const items = useMemo(() => {
     const by = new Map();
+    const flow = Object.fromEntries((data?.flow || []).map((f) => [`${f.item_id}-${f.make_id || ''}`, f]));
     for (const l of data?.lines || []) {
       const k = `${l.item_id}-${l.make_id || ''}`;
-      const it = by.get(k) || { key: k, code: l.item_code, name: l.item_name, make: l.make_name, uom: l.uom, qty: 0, on: [] };
+      const it = by.get(k) || {
+        key: k, code: l.item_code, name: l.item_name, make: l.make_name, uom: l.uom, qty: 0, on: [], f: flow[k] || {},
+      };
       it.qty += Number(l.qty) || 0;
       it.on.push(`${l.sno}-${qty(l.qty)}`);
       by.set(k, it);
@@ -777,6 +780,7 @@ function PrnPeek({ id, onClose }) {
   }, [boq.data]);
 
   const ap = data?.approval;
+  const sent = !!data?.pipeline && data.status !== 'DRAFT';
   const total = (data?.lines || []).reduce((t, l) => t + Number(l.qty || 0), 0);
   return (
     <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -800,6 +804,9 @@ function PrnPeek({ id, onClose }) {
               <Stat n={data.neededBy ? dmy(data.neededBy) : '—'} label="needed by" />
               {ap && <Stat n={`${ap.approvedCount} of ${ap.steps.length}`}
                 label={ap.status === 'APPROVED' ? 'approved' : 'approvals so far'} />}
+              {sent && data.status === 'APPROVED' && (
+                <div><StageTag stage={data.pipeline.stage} /><div className="l" style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>material</div></div>
+              )}
             </div>
 
             {view === 'items' ? (
@@ -810,6 +817,8 @@ function PrnPeek({ id, onClose }) {
                       <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
                       <th className="rt" style={{ width: 90 }}>Asked</th>
                       <th title="BOQ line - quantity asked on it">BOQ lines</th>
+                      {sent && <th className="rt" style={{ width: 110 }}>Received at site</th>}
+                      {sent && <th className="rt" style={{ width: 110 }}>Pending</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -820,6 +829,14 @@ function PrnPeek({ id, onClose }) {
                         <td>{it.uom}</td>
                         <td className="rt mono"><b>{qty(it.qty)}</b></td>
                         <td className="mono" style={{ color: 'var(--muted)' }}>{it.on.join(', ')}</td>
+                        {sent && <td className="rt mono">{Number(it.f.at_site_qty) ? <b>{qty(it.f.at_site_qty)}</b> : '—'}</td>}
+                        {sent && (
+                          <td className="rt mono">
+                            {Number(it.f.to_deliver_qty) > 0
+                              ? <b style={{ color: 'var(--st-stop)' }}>{qty(it.f.to_deliver_qty)}</b>
+                              : <Status tone="done" label="Delivered" />}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -828,6 +845,8 @@ function PrnPeek({ id, onClose }) {
                       <th colSpan={3} style={{ textAlign: 'left' }}>{plural(items.length, 'item')}</th>
                       <th className="rt mono">{qty(total)}</th>
                       <th />
+                      {sent && <th className="rt mono">{qty(data.pipeline?.at_site_qty)}</th>}
+                      {sent && <th className="rt mono">{qty(data.pipeline?.to_deliver_qty)}</th>}
                     </tr>
                   </tfoot>
                 </table>

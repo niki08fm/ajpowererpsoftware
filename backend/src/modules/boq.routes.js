@@ -558,9 +558,12 @@ router.get('/:id/history', wrap(async (req, res) => {
             u.name AS raised_by_name,
             (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id) AS line_count,
             (SELECT COALESCE(SUM(il.qty), 0) FROM indent_lines il WHERE il.indent_id = i.id) AS total_qty,
-            (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0) AS over_lines
+            (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0) AS over_lines,
+            -- how far it has got: delivered to site, or still pending
+            p.stage, p.indented_qty, p.at_site_qty, p.to_deliver_qty
        FROM indents i
        LEFT JOIN users u ON u.id = i.raised_by
+       LEFT JOIN v_indent_pipeline p ON p.indent_id = i.id
       WHERE i.boq_id = ?
       ORDER BY i.created_at DESC`, [boq.id]
   );

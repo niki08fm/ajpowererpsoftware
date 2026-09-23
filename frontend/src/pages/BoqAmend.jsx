@@ -1,10 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { api, qty, dmy, plural } from '../api';
 import {
   useApi, Card, Tag, Empty, Loading, ErrorNote, Modal, Field, Banner, useToast, Code, Status,
 } from '../components/ui';
 import { prnApproval } from '../vocab';
+import { PrnPeek, StageTag } from './Procurement';
 
 const n3 = (v) => Math.round(Number(v || 0) * 1000) / 1000;
 
@@ -235,11 +235,11 @@ function download(name, text) {
 }
 
 export function BoqHistory({ boqId, onClose }) {
-  const nav = useNavigate();
   const toast = useToast();
   const { data, loading, error, reload } = useApi(`/boq/${boqId}/history`, [boqId]);
   const { data: amendments } = useApi(`/boq/${boqId}/amendments`, [boqId]);
   const [tab, setTab] = useState('amendments');
+  const [peek, setPeek] = useState(null);   // a PRN opened over the history, read-only
 
   const grab = async (ind) => {
     try {
@@ -338,7 +338,7 @@ export function BoqHistory({ boqId, onClose }) {
                   <tr>
                     <th>PRN</th><th>Raised</th><th>Needed by</th><th>By</th>
                     <th className="rt">Lines</th><th className="rt">Qty</th>
-                    <th>Status</th><th style={{ width: 160 }} />
+                    <th>Status</th><th>Delivered to site</th><th style={{ width: 170 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -356,9 +356,19 @@ export function BoqHistory({ boqId, onClose }) {
                           <small><Status tone="attention" icon="alert" label={`${i.over_lines} past the estimate`} /></small>
                         )}
                       </td>
+                      <td>
+                        {i.status === 'APPROVED' && i.stage ? (
+                          <>
+                            <StageTag stage={i.stage} />
+                            <small>{Number(i.to_deliver_qty) > 0
+                              ? `${qty(i.at_site_qty)} of ${qty(i.indented_qty)} at site · ${qty(i.to_deliver_qty)} pending`
+                              : 'Everything asked for is at site'}</small>
+                          </>
+                        ) : <span style={{ color: 'var(--faint)' }}>—</span>}
+                      </td>
                       <td className="rt">
-                        <button className="btn sm" onClick={() => { onClose(); nav(`/indents/${i.id}`); }}>
-                          Open PRN
+                        <button className="btn sm" onClick={() => setPeek(i.id)}>
+                          View PRN
                         </button>{' '}
                         <button className="btn sm" onClick={() => grab(i)}>Download</button>
                       </td>
@@ -374,6 +384,8 @@ export function BoqHistory({ boqId, onClose }) {
           )}
         </Card>
       )}
+
+      {peek && <PrnPeek id={peek} onClose={() => setPeek(null)} />}
 
       {tab === 'trail' && (
         <Card title="What was done to this BOQ" sub="Newest first">
