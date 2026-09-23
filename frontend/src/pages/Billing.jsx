@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, withBranch, canWrite } from '../api';
+import { api, qty, money, dmy, today, withBranch, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter,
+  useApi, useToast, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, Code, Status,
+  DateField, NextStep,
 } from '../components/ui';
+import { Icon } from '../components/icons';
+import { billStatus, withWhom } from '../vocab';
 
 /**
  * Billing the client.
@@ -15,16 +18,21 @@ import {
  * this one answers to the client, so it speaks entirely in their
  * terms: their line, their wording, their unit, their rate.
  *
- * The indent is the ceiling on what may be billed. A line agreed at
- * 100 with material in for 60 bills to 60 — work nobody has asked
- * for material for has not been done, and invoicing it is how an RA
- * bill gets thrown back.
+ * What PRNs have asked for is the ceiling on what may be billed. A
+ * line agreed at 100 with material requested for 60 bills to 60 — work
+ * nobody has asked for material for has not been done, and invoicing it
+ * is how an RA bill gets thrown back.
  *
  * The agreed quantity is not a second ceiling, and running past it
  * is not treated as a fault. A work order is written before the work
  * is measured — the client is estimating their own requirement, and
- * on this kind of job it goes over. The indent is what reflects what
- * was actually needed, so billing follows the indent. The screen
+ * on this kind of job it goes over. The PRNs are what reflect what was
+ * actually needed, so billing follows them.
+ *
+ * "Raise" used to mean two things here: the button that sends a bill
+ * for its two approvals, and the status once they are done. The button
+ * now says what it does — send for approval — and only the approved
+ * bill is Raised. The screen
  * shows the part that runs past the order because somebody will ask,
  * not because anything is wrong.
  *
@@ -34,21 +42,10 @@ import {
 
 const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
 
-const STATUS = {
-  DRAFT:     { tone: '',     word: 'Draft' },
-  // between the two: finished, signed once or not at all, and not yet
-  // the client's — it is not revenue until both signatures are on it
-  SUBMITTED: { tone: 'warn', word: 'Waiting to be signed' },
-  RAISED:    { tone: 'ok',   word: 'Raised' },
-  CANCELLED: { tone: 'bad',  word: 'Cancelled' },
-};
-const BillTag = ({ status }) => {
-  const s = STATUS[status] || { tone: '', word: status };
-  return <Tag kind={s.tone}>{s.word}</Tag>;
-};
+const BillTag = ({ status }) => <Status is={billStatus(status)} />;
 
 /* ===================================================================
-   Which site
+   Bill a site: which one
    =================================================================== */
 export function Billing() {
   const { branchId } = useApp();
@@ -75,9 +72,9 @@ export function Billing() {
 
   return (
     <>
-      <PageHead title="Billing"
-        sub="Open a site to bill against its work order"
-        actions={<Link className="btn" to="/billing/bills">All bills</Link>} />
+      <PageHead title="Bill a site"
+        sub="Choose a site to bill against its work order, at the rates the client agreed"
+        actions={<Link className="btn" to="/billing/bills">RA bills</Link>} />
 
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
@@ -93,35 +90,34 @@ export function Billing() {
                 ))}
               </select>
             </Field>
-            <Field label="Find a site" hint="By site name or client">
-              <input className="inp" style={{ width: 260 }} value={q}
-                placeholder="Type either" onChange={(e) => set({ q: e.target.value })} />
+            <Field label="Find a site">
+              <input className="inp" type="search" style={{ width: 260 }} value={q}
+                placeholder="Site or client name…" onChange={(e) => set({ q: e.target.value })} />
             </Field>
           </div>
         </Card>
 
-        {loading || !data ? <Loading /> : (
+        {loading && !data ? <Loading what="sites" /> : data && (
           <>
-            <div className="stats">
-              <Stat n={data.totals.sites} label="sites with a work order" />
+            <div className="stats" style={{ margin: '16px 0' }}>
+              <Stat n={data.totals.sites} label="sites with a work order" one="site with a work order" />
               <Stat n={money(data.totals.contractValue)} label="contracted" />
-              <Stat n={money(data.totals.billedValue)} label="billed" tone="ok" />
+              <Stat n={money(data.totals.billedValue)} label="billed" />
               <Stat n={money(data.totals.contractValue - data.totals.billedValue)}
-                label="left to bill" tone="warn" />
-              <Stat n={data.totals.unbilled} label="never billed"
-                tone={data.totals.unbilled ? 'warn' : undefined} />
+                label="left to bill" />
+              <Stat n={data.totals.unbilled} label="sites never billed" one="site never billed" />
             </div>
 
-            <Card title={`${rows.length} site${rows.length === 1 ? '' : 's'}`}
-              sub="Only sites with a work order can be billed — a bill is raised on the client's own lines">
+            <Card title={plural(rows.length, 'site')}
+              sub="Only sites with a work order can be billed — a bill uses the client's own lines">
               <div className="tw">
                 <table>
                   <thead>
                     <tr>
                       <th>Site</th><th>Client</th><th>Work order</th>
                       <th className="rt">Contracted</th><th className="rt">Billed</th>
-                      <th style={{ width: 130 }}>Progress</th>
-                      <th className="rt">Left to bill</th><th>Last bill</th><th />
+                      <th style={{ width: 130 }}>Billed so far</th>
+                      <th className="rt">Left to bill</th><th>Last RA bill</th><th />
                     </tr>
                   </thead>
                   <tbody>
@@ -129,47 +125,36 @@ export function Billing() {
                       <tr key={r.site_id}>
                         <td>
                           <b>{r.name}</b>
-                          <div className="mono" style={{ color: 'var(--muted)', fontSize: 11 }}>
-                            {r.code}
-                          </div>
+                          <small><Code>{r.code}</Code></small>
                         </td>
                         <td>{r.client_name || '—'}</td>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>
-                          {r.wo_no}
-                          {r.client_wo_no && (
-                            <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-                              {r.client_wo_no}
-                            </div>
-                          )}
+                        <td>
+                          <Code>{r.wo_no}</Code>
+                          {r.client_wo_no && <small>Client's: <Code>{r.client_wo_no}</Code></small>}
                         </td>
                         <td className="rt mono">{money(r.contract_value)}</td>
                         <td className="rt mono">{money(r.billed_value)}</td>
                         <td>
-                          <Meter value={Number(r.billed_value)} max={Number(r.contract_value)} />
-                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                            {r.billed_pct}%
-                          </div>
+                          <Meter value={Number(r.billed_value)} max={Number(r.contract_value)} label="Billed so far" />
+                          <small className="mono">{r.billed_pct}% of the work order</small>
                         </td>
                         <td className="rt mono"><b>{money(r.to_bill_value)}</b></td>
                         <td>
                           {Number(r.bills)
-                            ? <>RA {r.last_ra_no}
-                              <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-                                {dmy(r.last_billed_on)}
-                              </div></>
-                            : <Tag kind="warn">never billed</Tag>}
-                          {Number(r.drafts) > 0 && <Tag>draft open</Tag>}
+                            ? <>RA {r.last_ra_no}<small>{dmy(r.last_billed_on)}</small></>
+                            : <Status tone="neutral" label="Never billed" />}
+                          {Number(r.drafts) > 0 && <small><Status tone="neutral" icon="draft" label="Draft open" /></small>}
                         </td>
                         <td>
                           <Link className="btn sm pri" to={`/billing/site/${r.site_id}`}>
-                            Open
+                            Open bill sheet
                           </Link>
                         </td>
                       </tr>
                     ))}
                     {!rows.length && (
                       <tr><td colSpan={9}>
-                        <Empty title="No site here can be billed yet">
+                        <Empty title="No site can be billed yet">
                           A site needs a work order before there is anything to bill against.
                         </Empty>
                       </td></tr>
@@ -225,9 +210,9 @@ export function BillingSheet() {
   if (loading || !data) {
     return (
       <>
-        <PageHead title="Billing" />
+        <PageHead title="Bill a site" />
         <div className="page-body">
-          {error ? <ErrorNote error={error} onRetry={reload} /> : <Loading />}
+          {error ? <ErrorNote error={error} onRetry={reload} /> : <Loading what="the bill sheet" />}
         </div>
       </>
     );
@@ -257,12 +242,13 @@ export function BillingSheet() {
     try {
       if (data.draft) {
         await api.put(`/bills/${data.draft.bill_id}`, body(false));
-        if (raise) await api.post(`/bills/${data.draft.bill_id}/raise`);
-        toast(raise ? `${data.draft.doc_no} raised — ${money(value)}` : 'Draft saved', 'ok');
+        let m = null;
+        if (raise) m = await api.post(`/bills/${data.draft.bill_id}/raise`);
+        toast(raise ? (m?.message || `${data.draft.doc_no} sent for approval — ${money(value)}`) : 'Draft saved', 'ok');
       } else {
         const r = await api.post('/bills', body(raise));
-        toast(raise ? `${r.docNo} raised — ${money(r.value)}` : `${r.docNo} saved as a draft`,
-          'ok');
+        toast(raise ? `${r.docNo} sent for approval — ${money(r.value)}. It becomes revenue once both approvals are done.`
+          : `${r.docNo} saved as a draft`, 'ok');
       }
       refresh();
     } catch (e) {
@@ -282,8 +268,8 @@ export function BillingSheet() {
   };
 
   const grab = () => downloadCsv(`billing-${data.site.code}`, [
-    ['Sno', 'Description', 'Unit', 'BOQ quantity', 'Indented till date',
-      'Billed till date', 'Left to bill', 'Not indented for', 'Rate',
+    ['Sl no', 'Description', 'Unit', 'BOQ quantity', 'Requested on PRNs to date',
+      'Billed to date', 'Left to bill', 'Not yet requested on a PRN', 'Rate',
       'Billing now', 'Amount'],
     ...lines.map((l) => [
       l.sno, l.description, l.uom, l.boq_qty, l.indented_qty, l.billed_qty,
@@ -295,76 +281,72 @@ export function BillingSheet() {
   return (
     <>
       <PageHead title={data.site.name}
-        sub={`${data.site.client_name || 'No client'} · ${data.workOrder.doc_no}`
-          + `${data.workOrder.client_wo_no ? ` · their ${data.workOrder.client_wo_no}` : ''}`}
+        sub={`${data.site.client_name || 'No client'} · work order ${data.workOrder.doc_no}`
+          + `${data.workOrder.client_wo_no ? ` (client's ${data.workOrder.client_wo_no})` : ''}`}
         actions={
-          <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={grab}>Download</button>
+          <>
+            <button className="btn" onClick={grab}><Icon name="download" size={14} />Download</button>
             <Link className="btn" to="/billing">All sites</Link>
-          </div>
+          </>
         } />
 
       <div className="page-body">
-        <div className="stats">
-          <Stat n={money(data.totals.contractValue)} label="contracted" />
-          <Stat n={money(data.totals.billedValue)} label="billed to date" tone="ok" />
-          <Stat n={money(data.totals.toBillValue)} label="can be billed now" tone="warn" />
-          <Stat n={money(data.totals.unprovisionedValue)} label="not indented for yet" />
-          <Stat n={`${data.totals.billedPct}%`} label="of the work order" />
-        </div>
+        <Card className="pad">
+          <div className="stats">
+            <Stat n={money(data.totals.contractValue)} label="contracted" />
+            <Stat n={money(data.totals.billedValue)} label="billed to date" />
+            <Stat n={money(data.totals.toBillValue)} label="can be billed now" />
+            <Stat n={money(data.totals.unprovisionedValue)} label="not yet requested on a PRN" />
+            <Stat n={`${data.totals.billedPct}%`} label="of the work order billed" />
+          </div>
+        </Card>
+        <div style={{ height: 16 }} />
 
         {Number(data.totals.overContractValue) > 0 && (
-          <Banner kind="info" icon="▸">
+          <Banner kind="info">
             <b>{money(data.totals.overContractValue)}</b> beyond the work order has been
-            indented for, and is billable. A work order is written before the work is
-            measured, so the real requirement running past it is ordinary — this is here
-            to be seen, not to be fixed.
+            requested on PRNs, and is billable. A work order is written before the work is
+            measured, so the real requirement running past it is ordinary — this is shown
+            so it can be seen, not because anything is wrong.
           </Banner>
         )}
 
         {lines.some((l) => Number(l.over_billed_qty) > 0) && (
-          <Banner kind="bad" icon="!">
-            Some lines have been billed past what was indented for —{' '}
+          <Banner kind="bad">
+            Some lines have been billed past what PRNs asked for —{' '}
             {lines.filter((l) => Number(l.over_billed_qty) > 0)
               .map((l) => `line ${l.sno} by ${qty(l.over_billed_qty)} ${l.uom}`).join(', ')}.
             Those bills are already with the client so nothing is undone here, but no more
-            can go on those lines until the material is indented for.
+            can go on those lines until the site requests the material on a PRN.
           </Banner>
         )}
 
         {Number(data.totals.unprovisionedValue) > 0 && (
-          <Banner kind="info" icon="▸"
-            action={<Link className="btn sm" to={`/indents?site=${siteId}`}>Indents</Link>}>
+          <Banner kind="info">
             <b>{money(data.totals.unprovisionedValue)}</b> of this work order has no material
-            indented for it, so it cannot be billed yet. Billing stops at whatever material
-            has been asked for.
+            requested on a PRN yet, so it cannot be billed yet. Billing stops at whatever
+            material the site's PRNs have asked for.
           </Banner>
         )}
 
         {data.draft && (
-          <Banner kind="warn" icon="✎"
-            action={<button className="btn sm bad" onClick={discard}>Delete the draft</button>}>
-            <b>{data.draft.doc_no}</b> is open as a draft (RA {data.draft.ra_no}). The
-            quantities below are its. Nothing is billed until you raise it.
+          <Banner kind="info" icon="draft"
+            action={<button className="btn sm bad" onClick={discard}>Delete draft</button>}>
+            <Code as="b">{data.draft.doc_no}</Code> is open as a draft (RA {data.draft.ra_no}). The
+            quantities below are its. Nothing is billed until it is sent for approval and approved.
           </Banner>
         )}
 
         <Card title={`RA ${data.draft ? data.draft.ra_no : data.nextRaNo}`}
           sub="What this bill covers">
-          <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Bill date">
-              <input className="inp" type="date" style={{ width: 155 }} value={head.billDate}
-                onChange={(e) => setHead((h) => ({ ...h, billDate: e.target.value }))} />
-            </Field>
-            <Field label="Period from">
-              <input className="inp" type="date" style={{ width: 155 }} value={head.periodFrom}
-                onChange={(e) => setHead((h) => ({ ...h, periodFrom: e.target.value }))} />
-            </Field>
-            <Field label="Period to">
-              <input className="inp" type="date" style={{ width: 155 }} value={head.periodTo}
-                onChange={(e) => setHead((h) => ({ ...h, periodTo: e.target.value }))} />
-            </Field>
-            <Field label="Their reference" hint="Certificate or measurement sheet number">
+          <div className="pad searchbar" style={{ marginBottom: 0 }}>
+            <DateField label="Bill date" value={head.billDate}
+              onChange={(e) => setHead((h) => ({ ...h, billDate: e.target.value }))} />
+            <DateField label="Period from" value={head.periodFrom}
+              onChange={(e) => setHead((h) => ({ ...h, periodFrom: e.target.value }))} />
+            <DateField label="Period to" value={head.periodTo} min={head.periodFrom || undefined}
+              onChange={(e) => setHead((h) => ({ ...h, periodTo: e.target.value }))} />
+            <Field label="Client's reference" hint="Certificate or measurement sheet number">
               <input className="inp" style={{ width: 200 }} value={head.clientRef}
                 placeholder="Optional"
                 onChange={(e) => setHead((h) => ({ ...h, clientRef: e.target.value }))} />
@@ -373,16 +355,16 @@ export function BillingSheet() {
         </Card>
 
         <Card title="The work order, line by line"
-          sub="Quantities are the client's. A line bills up to what material has been indented for — past the agreed quantity too, if the indent went there.">
+          sub="Quantities are the client's. A line bills up to what the site's PRNs have asked for — past the agreed quantity too, if the PRNs went there.">
           <div className="tw">
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: 50 }}>Sno</th>
+                  <th style={{ width: 56 }}>Sl no</th>
                   <th>Description</th>
                   <th style={{ width: 55 }}>Unit</th>
                   <th className="rt" style={{ width: 100 }}>BOQ qty</th>
-                  <th className="rt" style={{ width: 110 }}>Indented</th>
+                  <th className="rt" style={{ width: 120 }}>Requested on PRNs</th>
                   <th className="rt" style={{ width: 110 }}>Billed</th>
                   <th className="rt" style={{ width: 120 }}>Left to bill</th>
                   <th className="rt" style={{ width: 100 }}>Rate</th>
@@ -397,8 +379,8 @@ export function BillingSheet() {
                   const bad = v > left + 0.0005;
                   const done = left <= 0.0005;
                   // nothing left to bill means one of two things:
-                  // the whole agreed quantity is invoiced, or the
-                  // indent has run out
+                  // the whole agreed quantity is invoiced, or what
+                  // the PRNs asked for has run out
                   const capped = Number(l.indented_qty) < Number(l.boq_qty);
                   const fullyBilled = Number(l.billed_qty) >= Number(l.boq_qty) - 0.0005;
                   const pastWo = Number(l.over_contract_qty) > 0;
@@ -408,49 +390,45 @@ export function BillingSheet() {
                       <td>
                         <b>{l.description}</b>
                         {Number(l.var_qty) !== 0 && (
-                          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-                            contracted {qty(l.contracted_qty)}, amended by {qty(l.var_qty)}
-                          </div>
+                          <small>Contracted {qty(l.contracted_qty)}, amended by {qty(l.var_qty)}</small>
                         )}
                       </td>
                       <td>{l.uom}</td>
                       <td className="rt mono">
                         {qty(l.boq_qty)}
                         {pastWo && (
-                          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-                            +{qty(l.over_contract_qty)} indented
-                          </div>
+                          <small>+{qty(l.over_contract_qty)} requested on PRNs</small>
                         )}
                       </td>
                       <td className="rt mono"
-                        title="Material indented for, in the client's units. This is the ceiling on what may be billed.">
+                        title="Material requested on PRNs, in the client's units. This is the ceiling on what may be billed.">
                         {Number(l.indented_qty) > 0
-                          ? <b style={capped ? { color: 'var(--warn)' } : undefined}>
-                            {qty(l.indented_qty)}</b>
+                          ? <b>{qty(l.indented_qty)}{capped && <small style={{ fontWeight: 500 }}>Less than the BOQ</small>}</b>
                           : <span style={{ color: 'var(--muted)' }}>—</span>}
                       </td>
                       <td className="rt mono">
                         {qty(l.billed_qty)}
                         {Number(l.over_billed_qty) > 0 && (
-                          <div style={{ color: 'var(--bad)', fontSize: 11 }}>
-                            {qty(l.over_billed_qty)} past the indent
-                          </div>
+                          <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>
+                            {qty(l.over_billed_qty)} past what PRNs asked for
+                          </small>
                         )}
                       </td>
                       <td className="rt mono">
                         {done
                           ? (fullyBilled
-                            ? <Tag kind="ok">done</Tag>
-                            : <Tag kind="warn">indent more</Tag>)
+                            ? <Status tone="done" label="Billed in full" />
+                            : <Status tone="attention" label="Needs a PRN" hint="Nothing more can be billed until the site requests more material on a PRN" />)
                           : <b>{qty(left)}</b>}
                       </td>
                       <td className="rt mono">{money(l.rate)}</td>
                       <td>
-                        <input className="inp rt mono" type="number" min="0" step="0.001"
+                        <input className="inp rt mono" type="number" min="0" step="0.001" inputMode="decimal"
                           value={entry[l.wo_line_id] ?? ''}
                           disabled={done}
                           placeholder={done ? '' : '0'}
-                          style={bad ? { borderColor: 'var(--bad)', color: 'var(--bad)' } : undefined}
+                          aria-label={`Quantity to bill on line ${l.sno}`} aria-invalid={bad || undefined}
+                          style={bad ? { borderColor: 'var(--st-stop)', color: 'var(--st-stop)' } : undefined}
                           onChange={(e) => setEntry((x) => ({
                             ...x, [l.wo_line_id]: e.target.value,
                           }))} />
@@ -467,7 +445,7 @@ export function BillingSheet() {
                 <tr>
                   <td colSpan={8} className="rt"><b>This bill</b></td>
                   <td className="rt mono">
-                    {picked.length} line{picked.length === 1 ? '' : 's'}
+                    {plural(picked.length, 'line')}
                   </td>
                   <td className="rt mono"><b style={{ fontSize: 16 }}>{money(value)}</b></td>
                 </tr>
@@ -477,13 +455,13 @@ export function BillingSheet() {
         </Card>
 
         {over.length > 0 && (
-          <Banner kind="bad" icon="!">
+          <Banner kind="bad">
             {over.map((x) => (
               <div key={x.line.wo_line_id}>
                 Line {x.line.sno} — only {qty(x.line.to_bill_qty)} {x.line.uom} can be
-                billed. Material has been indented for {qty(x.line.indented_qty)}
-                {' '}and {qty(x.line.billed_qty)} is already billed; indent the rest
-                before invoicing it.
+                billed. PRNs have asked for {qty(x.line.indented_qty)}
+                {' '}and {qty(x.line.billed_qty)} is already billed; the site has to request the rest
+                on a PRN before it can be billed.
               </div>
             ))}
           </Banner>
@@ -492,40 +470,42 @@ export function BillingSheet() {
         <Card>
           <div className="pad" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{money(value)}</div>
-              <div style={{ color: 'var(--muted)', fontSize: 12 }}>
-                at the rates on {data.workOrder.doc_no}. Raising it makes this revenue —
-                a draft is not.
+              <div style={{ fontSize: 20, fontWeight: 600 }} className="mono">{money(value)}</div>
+              <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                at the rates on {data.workOrder.doc_no}. It goes to the site's GM and then Management
+                for approval, and becomes revenue only once both approve.
               </div>
             </div>
             <div className="sp" />
+            {!picked.length && <span className="why-not"><Icon name="info" size={14} />Type a quantity to bill</span>}
             <button className="btn" disabled={!picked.length || saving}
               onClick={() => save(false)}>
-              {data.draft ? 'Save the draft' : 'Save as draft'}
+              Save as draft
             </button>
             <button className="btn pri" disabled={!ready} onClick={() => save(true)}>
-              {saving ? 'Raising…' : `Raise RA ${data.draft ? data.draft.ra_no : data.nextRaNo}`}
+              <Icon name="send" />{saving ? 'Sending…' : `Send RA ${data.draft ? data.draft.ra_no : data.nextRaNo} for approval`}
             </button>
           </div>
         </Card>
 
-        <Card title="Bills on this site" sub="Newest first">
+        <Card title="RA bills for this site" sub="Newest first">
           <div className="tw">
             <table>
               <thead>
                 <tr>
-                  <th>RA</th><th>Document</th><th>Date</th><th>Period</th>
-                  <th>Their reference</th><th className="rt">Lines</th>
+                  <th>RA</th><th>Bill number</th><th>Bill date</th><th>Period</th>
+                  <th>Client's reference</th><th className="rt">Lines</th>
                   <th className="rt">Value</th><th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {data.bills.map((b) => (
-                  <tr key={b.bill_id} style={{ cursor: 'pointer' }}
-                    onClick={() => setOpen(b.bill_id)}>
+                  <tr key={b.bill_id} className="click" tabIndex={0}
+                    onClick={() => setOpen(b.bill_id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') setOpen(b.bill_id); }}>
                     <td><b>RA {b.ra_no}</b></td>
-                    <td className="mono" style={{ color: 'var(--brand-ink)' }}>{b.doc_no}</td>
-                    <td>{dmy(b.bill_date)}</td>
+                    <td><Code>{b.doc_no}</Code></td>
+                    <td className="mono">{dmy(b.bill_date)}</td>
                     <td style={{ color: 'var(--muted)' }}>
                       {b.period_from ? `${dmy(b.period_from)} – ${dmy(b.period_to)}` : '—'}
                     </td>
@@ -538,7 +518,7 @@ export function BillingSheet() {
                 {!data.bills.length && (
                   <tr><td colSpan={8}>
                     <Empty title="This site has never been billed">
-                      Put quantities against the lines above and raise RA 1.
+                      Type quantities against the lines above and send RA 1 for approval.
                     </Empty>
                   </td></tr>
                 )}
@@ -561,8 +541,9 @@ export function BillCard({ id, onClose, onChanged }) {
   const { data, loading, reload } = useApi(`/bills/${id}`, [id]);
   const [cancelling, setCancelling] = useState(false);
   const [why, setWhy] = useState('');
-  if (loading || !data) return <Modal title="Bill" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="RA bill" onClose={onClose}><Loading what="the bill" /></Modal>;
   const { head, lines, canRaise, canCancel } = data;
+  const w = withWhom(data.approval);
 
   const act = async (fn, word) => {
     try { await fn(); toast(`${head.doc_no} ${word}`, 'ok'); reload(); onChanged?.(); }
@@ -572,11 +553,11 @@ export function BillCard({ id, onClose, onChanged }) {
   const grab = () => downloadCsv(`${head.doc_no.replace(/\//g, '-')}`, [
     [head.doc_no, `RA ${head.ra_no}`],
     ['Site', head.site_name], ['Client', head.client_name || ''],
-    ['Work order', head.wo_no], ['Their reference', head.client_ref || ''],
+    ['Work order', head.wo_no], ["Client's reference", head.client_ref || ''],
     ['Bill date', dmy(head.bill_date)],
     ...(head.period_from ? [['Period', `${dmy(head.period_from)} to ${dmy(head.period_to)}`]] : []),
     [],
-    ['Sno', 'Description', 'Unit', 'BOQ qty', 'Billed before', 'This bill', 'To date',
+    ['Sl no', 'Description', 'Unit', 'BOQ qty', 'Billed before', 'This bill', 'To date',
       'Supply rate', 'Installation rate', 'Amount'],
     ...lines.map((l) => [
       l.sno, l.description, l.uom, l.boq_qty, l.previous_qty, l.qty, l.to_date_qty,
@@ -596,14 +577,14 @@ export function BillCard({ id, onClose, onChanged }) {
         actions={<BillTag status={head.status} />}
         footer={
           <>
-            <button className="btn" onClick={grab}>Download</button>
+            <button className="btn" onClick={grab}><Icon name="download" size={14} />Download</button>
             {canCancel && canWrite('/bills') && (
-              <button className="btn bad" onClick={() => setCancelling(true)}>Cancel it</button>
+              <button className="btn bad" onClick={() => setCancelling(true)}>Cancel bill</button>
             )}
             {canRaise && canWrite('/bills') && (
               <button className="btn pri"
-                onClick={() => act(() => api.post(`/bills/${head.bill_id}/raise`), 'raised')}>
-                Raise it
+                onClick={() => act(() => api.post(`/bills/${head.bill_id}/raise`), 'sent for approval')}>
+                <Icon name="send" />Send for approval
               </button>
             )}
           </>
@@ -611,24 +592,21 @@ export function BillCard({ id, onClose, onChanged }) {
         <div className="stats">
           <Stat n={money(head.supply_value)} label="supply" />
           <Stat n={money(head.inst_value)} label="installation" />
-          <Stat n={money(head.bill_value)} label="bill value" tone="brand" />
-          <Stat n={head.line_count} label="lines" />
+          <Stat n={money(head.bill_value)} label="bill value" />
+          <Stat n={head.line_count} label="lines" one="line" />
         </div>
 
         {head.status === 'DRAFT' && (
-          <Banner kind="warn" icon="✎">
-            This is a draft. It is not revenue and does not hold any quantity — another
-            bill could take the same work first.
-          </Banner>
+          <NextStep tone="neutral" icon="draft" now="Draft — not sent for approval"
+            then="It is not revenue and holds no quantity — another bill could take the same work first." />
         )}
         {head.status === 'SUBMITTED' && (
-          <Banner kind="warn" icon="…">
-            Waiting to be signed — the site GM first, then Management. It goes to the
-            client on the second signature, and is not revenue until then.
-          </Banner>
+          <NextStep tone="info" icon="clock"
+            now={`With ${w?.who || 'the site GM'} for approval${w ? ` · level ${w.level} of ${w.levels}` : ''}`}
+            then="The site's GM approves first, then Management. It goes to the client after both, and is not revenue until then." />
         )}
         {head.status === 'CANCELLED' && (
-          <Banner kind="bad" icon="!">
+          <Banner kind="bad">
             Cancelled{head.note ? ` — ${head.note}` : ''}. What it billed is free to be
             billed again.
           </Banner>
@@ -638,7 +616,7 @@ export function BillCard({ id, onClose, onChanged }) {
           <table>
             <thead>
               <tr>
-                <th style={{ width: 50 }}>Sno</th><th>Description</th>
+                <th style={{ width: 56 }}>Sl no</th><th>Description</th>
                 <th style={{ width: 55 }}>Unit</th>
                 <th className="rt">BOQ qty</th><th className="rt">Up to last bill</th>
                 <th className="rt">This bill</th><th className="rt">To date</th>
@@ -674,7 +652,7 @@ export function BillCard({ id, onClose, onChanged }) {
         <p style={{ color: 'var(--muted)', fontSize: 12 }}>
           Rates are the ones on {head.wo_no}, stamped when the bill was made, so a later
           correction upstream cannot reprice what is already with the client.
-          {head.raised_by_name && ` Raised by ${head.raised_by_name}.`}
+          {head.raised_by_name && ` Prepared by ${head.raised_by_name}.`}
         </p>
       </Modal>
 
@@ -687,11 +665,11 @@ export function BillCard({ id, onClose, onChanged }) {
               onClick={() => { setCancelling(false);
                 act(() => api.post(`/bills/${head.bill_id}/cancel`, { note: why.trim() }),
                   'cancelled'); }}>
-              Cancel this bill
+              Cancel bill
             </button>
           }>
-          <Field label="Why" hint="Required — the client will ask">
-            <input className="inp" value={why} autoFocus placeholder="Measurement disputed"
+          <Field label="Reason" hint="Required — the client will ask">
+            <input className="inp" value={why} autoFocus placeholder="e.g. Measurement disputed"
               onChange={(e) => setWhy(e.target.value)} />
           </Field>
         </Modal>
@@ -732,8 +710,8 @@ export function Bills() {
 
   return (
     <>
-      <PageHead title="Bills" sub="Every running account bill in this branch"
-        actions={canWrite('/bills') && <Link className="btn pri" to="/billing">Bill a site</Link>} />
+      <PageHead title="RA bills" sub="Every running account bill, numbered RA 1, RA 2, RA 3 for each site"
+        actions={canWrite('/bills') && <Link className="btn pri" to="/billing"><Icon name="plus" />Bill a site</Link>} />
 
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
@@ -744,8 +722,8 @@ export function Bills() {
               <select className="inp" style={{ width: 160 }} value={status}
                 onChange={(e) => set({ status: e.target.value })}>
                 <option value="ALL">Everything</option>
-                <option value="RAISED">Raised</option>
-                <option value="SUBMITTED">Waiting to be signed</option>
+                <option value="RAISED">{billStatus('RAISED').label}</option>
+                <option value="SUBMITTED">{billStatus('SUBMITTED').label}</option>
                 <option value="DRAFT">Drafts</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
@@ -759,42 +737,42 @@ export function Bills() {
                 ))}
               </select>
             </Field>
-            <Field label="Find" hint="Bill number, site, client or their reference">
-              <input className="inp" style={{ width: 250 }} value={q}
-                placeholder="Type any of them"
+            <Field label="Find">
+              <input className="inp" type="search" style={{ width: 260 }} value={q}
+                placeholder="Bill number, site, client, reference…"
                 onChange={(e) => set({ q: e.target.value })} />
             </Field>
           </div>
         </Card>
 
-        {loading || !data ? <Loading /> : (
+        {loading && !data ? <Loading what="RA bills" /> : data && (
           <>
-            <div className="stats">
+            <div className="stats" style={{ margin: '16px 0' }}>
               <Stat n={data.totals.raised} label="raised" />
-              <Stat n={money(data.totals.value)} label="billed" tone="ok" />
-              <Stat n={data.totals.drafts} label="drafts"
-                tone={data.totals.drafts ? 'warn' : undefined} />
+              <Stat n={money(data.totals.value)} label="billed (raised bills)" />
+              <Stat n={data.totals.drafts} label="drafts" one="draft" />
             </div>
 
-            <Card title={`${rows.length} bill${rows.length === 1 ? '' : 's'}`}>
+            <Card title={plural(rows.length, 'RA bill')}>
               <div className="tw">
                 <table>
                   <thead>
                     <tr>
-                      <th>Document</th><th>RA</th><th>Site</th><th>Client</th>
-                      <th>Date</th><th className="rt">Lines</th>
+                      <th>Bill number</th><th>RA</th><th>Site</th><th>Client</th>
+                      <th>Bill date</th><th className="rt">Lines</th>
                       <th className="rt">Value</th><th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((b) => (
-                      <tr key={b.bill_id} style={{ cursor: 'pointer' }}
-                        onClick={() => setOpen(b.bill_id)}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{b.doc_no}</td>
+                      <tr key={b.bill_id} className="click" tabIndex={0}
+                        onClick={() => setOpen(b.bill_id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setOpen(b.bill_id); }}>
+                        <td><Code as="b">{b.doc_no}</Code></td>
                         <td>RA {b.ra_no}</td>
                         <td>{b.site_name}</td>
                         <td style={{ color: 'var(--muted)' }}>{b.client_name || '—'}</td>
-                        <td>{dmy(b.bill_date)}</td>
+                        <td className="mono">{dmy(b.bill_date)}</td>
                         <td className="rt mono">{b.line_count}</td>
                         <td className="rt mono"><b>{money(b.bill_value)}</b></td>
                         <td><BillTag status={b.status} /></td>
@@ -802,8 +780,8 @@ export function Bills() {
                     ))}
                     {!rows.length && (
                       <tr><td colSpan={8}>
-                        <Empty title="No bills yet">
-                          Open a site and raise RA 1.
+                        <Empty title="No RA bills yet">
+                          Open a site under Bill a site and send RA 1 for approval.
                         </Empty>
                       </td></tr>
                     )}

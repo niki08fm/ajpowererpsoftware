@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { PageHead, useApp } from '../App';
 import { api, dmy } from '../api';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, useToast,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, useToast, Status,
 } from '../components/ui';
 
 /**
@@ -15,13 +15,13 @@ import {
  * site's own record, so the site screens show the same people.
  */
 const ROLE_NOTE = {
-  Management: 'Sees every department and every project, view only. Signs the second level. Makes the logins.',
-  'General Manager': 'Sees every department, view only — for the projects they are GM of. Signs the first level.',
+  Management: 'Sees every department and every project, view only. Approves level 2. Makes the logins.',
+  'General Manager': 'Sees every department, view only — for the projects they are GM of. Approves level 1.',
   Planning: 'Sites, work orders, BOQs and clients.',
-  Site: 'Indents, acknowledgements, site store, expenses — on their own sites. Issues material only as store keeper.',
-  Store: 'PRNs, GRNs, challans, stock and movement.',
-  Procurement: 'The buy list, rate comparisons, purchase orders and suppliers.',
-  Billing: 'Bills for each site.',
+  Site: 'PRNs, receiving deliveries, site stock, expenses — on their own sites. Issues to workers only as the site store keeper.',
+  Store: 'PRNs to fulfil, GRNs, delivery challans, stock and stock movement.',
+  Procurement: 'To buy, rate comparisons, purchase orders and suppliers.',
+  Billing: 'RA bills for each site.',
 };
 const HAS_SITES = ['General Manager', 'Site'];
 const AS_LABEL = { GM: 'GM', HEAD: 'Head', KEEPER: 'Store keeper', TEAM: 'Team' };
@@ -76,10 +76,8 @@ export default function Users() {
                         <small className="mono">{u.empCode} · {u.email}</small>
                       </td>
                       <td>
-                        <Tag kind={['Management', 'General Manager'].includes(u.department) ? 'brand' : ''}>
-                          {u.department}
-                        </Tag>
-                        {!u.isActive && <> <Tag kind="bad">Switched off</Tag></>}
+                        <span className="tag kind">{u.department}</span>
+                        {!u.isActive && <> <Status tone="stopped" label="Cannot sign in" /></>}
                       </td>
                       <td>
                         {HAS_SITES.includes(u.department) ? (
@@ -185,7 +183,7 @@ function UserForm({ user, roles, self, onClose, onDone }) {
         <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="checkbox" checked={f.isActive}
             onChange={(e) => setF({ ...f, isActive: e.target.checked })} />
-          Can sign in {f.isActive ? '' : '— switched off, and signed out now'}
+          Can sign in {f.isActive ? '' : '— turned off; they are signed out now'}
         </label>
       )}
       {user && HAS_SITES.includes(f.department) && f.department !== user.department && (

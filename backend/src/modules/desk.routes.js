@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { many, one } = require('../config/db');
 const { validate, wrap } = require('../middleware/validate');
 const { badRequest, notFound } = require('../lib/errors');
+const { plural } = require('../lib/words');
 
 /**
  * My desk — the first thing each department sees.
@@ -95,16 +96,16 @@ async function planning(branchId) {
 
   const needs = [
     ...amend.map((r) => ({ kind: 'Amendment due', ref: r.doc_no, title: r.name,
-      detail: `${r.over_line_count} line(s) past the estimate, worst ${Number(r.worst_over_pct)}% over`,
+      detail: `${plural(r.over_line_count, 'line')} past the estimate, worst ${Number(r.worst_over_pct)}% over`,
       severity: 'bad', late: 0, to: `/sites/${r.site_id}` })),
     ...noBoq.map((r) => ({ kind: 'Work order, no BOQ', ref: r.doc_no, title: r.name,
-      detail: `loaded ${r.age} day(s) ago — nothing can be indented until the BOQ exists`,
+      detail: `loaded ${plural(r.age, 'day')} ago — no PRN can be raised until the BOQ exists`,
       severity: r.age > 3 ? 'bad' : 'warn', late: Math.max(0, r.age - 3), to: `/sites/${r.site_id}` })),
     ...drafts.map((r) => ({ kind: 'BOQ in draft', ref: r.doc_no, title: r.name,
-      detail: `${r.prepared_count} of ${r.wo_line_count} lines prepared · ${r.age} day(s) old`,
+      detail: `${r.prepared_count} of ${r.wo_line_count} lines prepared · ${plural(r.age, 'day')} old`,
       severity: r.age > 3 ? 'bad' : 'warn', late: Math.max(0, r.age - 3), to: `/sites/${r.site_id}` })),
     ...noWo.map((r) => ({ kind: 'Site, no work order', ref: r.code, title: r.name,
-      detail: `opened ${r.age} day(s) ago`, severity: 'warn', late: 0, to: `/sites/${r.id}` })),
+      detail: `opened ${plural(r.age, 'day')} ago`, severity: 'warn', late: 0, to: `/sites/${r.id}` })),
   ].sort(byUrgency);
 
   const bs = await buckets('week');
@@ -168,21 +169,21 @@ async function site(siteId) {
     ...lateprn.map((r) => ({ kind: 'PRN overdue', ref: r.doc_no, title: `wanted by ${String(r.needed_by).slice(0, 10)}`,
       detail: `still not here · ${String(r.stage).replace(/_/g, ' ').toLowerCase()}`,
       severity: 'bad', late: late(r.days_over), to: `/indents/${r.indent_id}` })),
-    ...inbound.map((r) => ({ kind: 'Challan to sign for', ref: r.doc_no, title: `from ${r.from_name}`,
-      detail: `on the road ${r.days_out} day(s)`, severity: r.days_out > 3 ? 'bad' : 'warn',
+    ...inbound.map((r) => ({ kind: 'Delivery to receive', ref: r.doc_no, title: `from ${r.from_name}`,
+      detail: `on the road ${plural(r.days_out, 'day')}`, severity: r.days_out > 3 ? 'bad' : 'warn',
       late: Math.max(0, r.days_out - 3), to: '/site/inbox' })),
     ...direct.map((r) => ({ kind: 'Order coming direct', ref: r.doc_no, title: r.supplier_name,
       detail: r.expected_date ? `expected ${String(r.expected_date).slice(0, 10)}` : 'no expected date',
       severity: Number(r.overdue) ? 'bad' : 'warn', late: late(r.days_over), to: '/site/inbox' })),
     ...trs.map((r) => ({ kind: r.state === 'AWAITING' ? 'Transfer to answer' : 'Transfer to send',
-      ref: r.doc_no, title: `to ${r.to_name}`, detail: `asked ${r.age} day(s) ago`,
+      ref: r.doc_no, title: `to ${r.to_name}`, detail: `asked ${plural(r.age, 'day')} ago`,
       severity: r.days_late > 0 || r.age > 2 ? 'bad' : 'warn', late: late(r.days_late), to: '/site/transfers' })),
     ...returned.map((r) => ({ kind: 'PRN sent back', ref: r.doc_no, title: 'needs changing and resending',
       detail: '', severity: 'warn', late: 0, to: `/indents/${r.id}` })),
     ...claims.map((r) => ({ kind: 'Claim sent back', ref: r.doc_no, title: r.description,
       detail: '', severity: 'warn', late: 0, to: '/site/expenses' })),
     ...waiting.map((r) => ({ kind: 'PRN with the GM', ref: r.doc_no, title: 'waiting for approval',
-      detail: `${r.age} day(s) so far`, severity: r.age > 2 ? 'warn' : '', late: Math.max(0, r.age - 2),
+      detail: `${plural(r.age, 'day')} so far`, severity: r.age > 2 ? 'warn' : '', late: Math.max(0, r.age - 2),
       to: `/indents/${r.id}` })),
   ].sort(byUrgency);
 
@@ -201,7 +202,7 @@ async function site(siteId) {
     scope: { site: s.name },
     tiles: [
       { key: 'late', label: 'PRNs past their date', n: lateprn.length, tone: lateprn.length ? 'bad' : '', to: '/indents' },
-      { key: 'sign', label: 'deliveries to sign for', n: inbound.length + direct.length,
+      { key: 'sign', label: 'deliveries to receive', n: inbound.length + direct.length,
         tone: inbound.length + direct.length ? 'warn' : '', to: '/site/inbox' },
       { key: 'tr', label: 'transfers to handle', n: trs.length, tone: trs.length ? 'warn' : '', to: '/site/transfers' },
       { key: 'gm', label: 'PRNs with the GM', n: waiting.length, to: '/indents' },
@@ -215,7 +216,7 @@ async function site(siteId) {
       lines: [
         { key: 'issues', label: 'Issue slips', tone: 'brand' },
         { key: 'prns', label: 'PRNs raised', tone: 'navy' },
-        { key: 'acks', label: 'Deliveries signed', tone: 'cat3' },
+        { key: 'acks', label: 'Deliveries received', tone: 'cat3' },
       ],
       series: series(['issues', 'prns', 'acks'], [issues, prns, acks], bs),
     }],
@@ -253,10 +254,10 @@ async function store(storeId) {
       detail: `expected ${String(r.expected_date).slice(0, 10)}`, severity: 'bad', late: late(r.days_over),
       to: `/purchase-orders/${r.po_id}` })),
     ...unsigned.filter((r) => r.days_out > 3).map((r) => ({ kind: 'Challan unsigned', ref: r.doc_no,
-      title: `to ${r.to_name}`, detail: `out ${r.days_out} day(s) with no signature`,
+      title: `to ${r.to_name}`, detail: `out ${plural(r.days_out, 'day')}, not yet received`,
       severity: 'warn', late: r.days_out - 3, to: `/challans/${r.dc_id}` })),
     ...trs.filter((r) => r.age > 2).map((r) => ({ kind: 'Transfer unanswered', ref: r.doc_no,
-      title: `${r.from_name} → ${r.to_name}`, detail: `asked ${r.age} day(s) ago`,
+      title: `${r.from_name} → ${r.to_name}`, detail: `asked ${plural(r.age, 'day')} ago`,
       severity: 'warn', late: r.age - 2, to: '/store/transfers' })),
   ].sort(byUrgency);
 
@@ -317,7 +318,7 @@ async function procure(branchId) {
       detail: `to ${r.deliver_to_name}, expected ${String(r.expected_date).slice(0, 10)}`,
       severity: 'bad', late: late(r.days_over), to: `/purchase-orders/${r.po_id}` })),
     ...withGm.map((r) => ({ kind: 'Order with the GM', ref: r.doc_no, title: r.supplier_name,
-      detail: `${r.age} day(s) waiting for a signature`, severity: r.age > 2 ? 'warn' : '',
+      detail: `${plural(r.age, 'day')} waiting for approval`, severity: r.age > 2 ? 'warn' : '',
       late: Math.max(0, r.age - 2), to: `/purchase-orders/${r.po_id}`, amount: Number(r.po_value) })),
   ].sort(byUrgency);
 
@@ -338,7 +339,7 @@ async function procure(branchId) {
     ],
     needs,
     trends: [{
-      key: 'placed', title: 'Orders placed, month by month', sub: 'signed orders, value incl. GST',
+      key: 'placed', title: 'Orders placed, month by month', sub: 'approved orders, value incl. GST',
       bucket: 'month', unit: 'money',
       lines: [{ key: 'placed', label: 'Ordered', tone: 'brand' }],
       series: series(['placed'], [placed], bs),
@@ -365,10 +366,10 @@ async function billing(branchId) {
 
   const needs = [
     ...drafts.map((r) => ({ kind: 'Bill left in draft', ref: r.doc_no, title: r.name,
-      detail: `${r.age} day(s) old — a draft is not revenue`, severity: r.age > 3 ? 'warn' : '',
+      detail: `${plural(r.age, 'day')} old — a draft is not revenue`, severity: r.age > 3 ? 'warn' : '',
       late: Math.max(0, r.age - 3), to: `/billing/site/${r.site_id}` })),
     ...toBill.map((r) => ({ kind: 'Ready to bill', ref: r.code, title: r.name,
-      detail: `${r.line_count} line(s) with work to bill`, severity: 'warn', late: 0,
+      detail: `${plural(r.line_count, 'line')} with work to bill`, severity: 'warn', late: 0,
       to: `/billing/site/${r.site_id}`, amount: Number(r.value) })),
   ].sort(byUrgency);
 

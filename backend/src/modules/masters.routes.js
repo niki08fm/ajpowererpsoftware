@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { normKey, sortKey } = require('../lib/normKey');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const { plural } = require('../lib/words');
 
 router.get('/branches', wrap(async (_req, res) =>
   res.json(await many(`SELECT id, code, name, gstin, address FROM branches ORDER BY name`))));
@@ -89,7 +90,7 @@ router.patch('/clients/:id',
         `SELECT COUNT(*) AS n FROM sites WHERE client_id = ?`, [client.id]);
       if (Number(used.n) > 0) {
         throw conflict(
-          `${client.name} already has ${used.n} site(s), so its branch cannot be changed — `
+          `${client.name} already has ${plural(used.n, 'site')}, so its branch cannot be changed — `
           + 'a site and its client must be in the same branch.',
           { clientId: client.id, sites: Number(used.n) }
         );

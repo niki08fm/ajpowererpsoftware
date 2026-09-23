@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
 const chain = require('../lib/approvals');
+const { plural } = require('../lib/words');
 
 /**
  * Purchase orders.
@@ -97,7 +98,7 @@ router.get('/:id', wrap(async (req, res) => {
 
   const lines = await many(
     `SELECT l.*,
-            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ' ', ROUND(pli.qty, 3)) ORDER BY i.doc_no SEPARATOR ' · ')
+            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ': ', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM ROUND(pli.qty, 3)))) ORDER BY i.doc_no SEPARATOR ' · ')
                FROM po_line_indents pli JOIN indents i ON i.id = pli.indent_id
               WHERE pli.po_line_id = l.po_line_id) AS against
        FROM v_po_line_status l WHERE l.po_id = ? ORDER BY l.item_name`, [po.po_id]);
@@ -115,10 +116,14 @@ router.get('/:id', wrap(async (req, res) => {
             line_count, grn_qty AS qty, grn_value AS value
        FROM v_grn_status WHERE po_id = ? ORDER BY receipt_date, grn_id`, [po.po_id]);
 
+  // whose desk it is on and at which level, with names
+  const approval = await chain.trail('PO', po.po_id, req.user?.id);
   res.json({
     ...po, lines, indents, receipts, events,
     canEdit: EDITABLE.includes(po.status),
-    canSign: po.status === 'SUBMITTED',
+    // can the person looking approve it now — not merely "is it waiting"
+    canApprove: po.status === 'SUBMITTED' && Boolean(approval?.canApprove),
+    approval,
   });
 }));
 
@@ -207,7 +212,7 @@ async function checkDestination(indents, deliverToId) {
     );
   }
   if (sites.length === 1 && dest.site_type === 'SITE' && dest.id !== sites[0]) {
-    throw badRequest('That is not the site these indents were raised for');
+    throw badRequest('That is not the site these PRNs were raised for');
   }
   return dest;
 }
@@ -241,11 +246,11 @@ router.post('/', validate(createBody), wrap(async (req, res) => {
   const indents = await many(
     `SELECT id, doc_no, site_id, branch_id, status, needed_by, indent_date
        FROM indents WHERE id IN (${marks})`, ids);
-  if (indents.length !== ids.length) throw badRequest('One of those indents does not exist');
+  if (indents.length !== ids.length) throw badRequest('One of those PRNs does not exist');
   const bad = indents.find((i) => i.status !== 'APPROVED');
   if (bad) throw badRequest(`${bad.doc_no} is not approved`);
   const branches = [...new Set(indents.map((i) => i.branch_id))];
-  if (branches.length > 1) throw badRequest('Those indents are in different branches');
+  if (branches.length > 1) throw badRequest('Those PRNs are in different branches');
 
   const dest = await checkDestination(indents, b.deliverToId);
 
@@ -257,7 +262,7 @@ router.post('/', validate(createBody), wrap(async (req, res) => {
     if (!cmp) throw badRequest('That rate comparison does not exist');
     if (cmp.status !== 'APPROVED') {
       throw conflict(cmp.status === 'DECIDED'
-        ? `${cmp.doc_no} is still waiting to be signed — an order cannot be raised off it yet`
+        ? `${cmp.doc_no} is still waiting for approval — an order cannot be raised from it yet`
         : `${cmp.doc_no} has not been decided`);
     }
   }
@@ -282,7 +287,7 @@ router.post('/', validate(createBody), wrap(async (req, res) => {
     await log(conn, {
       entity: 'PO', entityId: po.insertId, docNo,
       action: b.submit ? 'Sent to the GM' : 'Drafted',
-      detail: `${b.lines.length} line(s) · ${ids.length} indent(s) · to ${dest.name}`,
+      detail: `${plural(b.lines.length, 'line')} · ${plural(ids.length, 'PRN')} · to ${dest.name}`,
       user: req.user,
     });
     if (b.submit) {
@@ -340,7 +345,7 @@ router.post('/:id/decide',
     const po = await one(`SELECT * FROM purchase_orders WHERE id = ?`, [req.params.id]);
     if (!po) throw notFound('No such purchase order');
     if (po.status !== 'SUBMITTED') {
-      throw conflict(`This order is ${po.status.toLowerCase()}, not waiting for a signature`);
+      throw conflict(`This order is ${po.status.toLowerCase()}, not waiting for approval`);
     }
     // sending it back without saying why leaves the buyer guessing
     if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
@@ -356,8 +361,8 @@ router.post('/:id/decide',
         : step.done ? 'APPROVED' : 'SUBMITTED';
       await run(
         `UPDATE purchase_orders
-            SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?`,
-        [status, step.done || req.body.action === 'RETURNED' ? new Date() : null,
+            SET status = ?, decided_at = IF(?, NOW(), NULL), decided_by = ? WHERE id = ?`,
+        [status, step.done || req.body.action === 'RETURNED',
           step.done ? req.user?.id || null : po.decided_by, po.id], conn
       );
       const event = req.body.action === 'RETURNED' ? 'RETURNED'
@@ -377,8 +382,8 @@ router.post('/:id/decide',
       message: req.body.action === 'RETURNED'
         ? `${po.doc_no} is back with the buyer`
         : step.done
-          ? `${po.doc_no} is signed and can go to the supplier`
-          : `${po.doc_no} is signed by the GM and now waits for Management`,
+          ? `${po.doc_no} is approved and can go to the supplier`
+          : `${po.doc_no} is approved at level 1 and is now with Management`,
     });
   })
 );
@@ -475,7 +480,7 @@ router.post('/:id/receipts',
     if (!po) throw notFound('No such purchase order');
     if (po.status !== 'APPROVED') {
       throw conflict(po.status === 'SUBMITTED'
-        ? 'This order has not been signed yet'
+        ? 'This order has not been approved yet'
         : `This order is ${po.status.toLowerCase()}`);
     }
     // A delivery is signed for where it was sent. One store cannot take
@@ -487,7 +492,7 @@ router.post('/:id/receipts',
       const here = await one(`SELECT name FROM sites WHERE id = ?`, [req.body.atSiteId]);
       throw conflict(
         `${po.doc_no} was sent to ${want.name}, so ${here ? here.name : 'this place'} `
-        + `cannot sign for it.`,
+        + `cannot receive it.`,
         { deliverToId: po.deliver_to_id, deliverToName: want.name }
       );
     }
@@ -534,7 +539,7 @@ router.post('/:id/receipts',
       await log(conn, {
         entity: 'GRN', entityId: grn.insertId, docNo,
         action: req.body.confirm ? 'Received' : 'Drafted',
-        detail: `against ${po.doc_no} · ${req.body.lines.length} line(s)`, user: req.user,
+        detail: `against ${po.doc_no} · ${plural(req.body.lines.length, 'line')}`, user: req.user,
       });
       return { id: grn.insertId, docNo };
     });

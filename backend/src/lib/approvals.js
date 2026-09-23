@@ -94,7 +94,7 @@ async function open(conn, { docType, docId, docNo, branchId, siteId, userId, not
 
   if (existing) {
     if (existing.status === 'PENDING') {
-      throw conflict(`${docNo || existing.doc_no} is already waiting for a signature`);
+      throw conflict(`${docNo || existing.doc_no} is already waiting for approval`);
     }
     if (existing.status === 'APPROVED') {
       throw conflict(`${docNo || existing.doc_no} has already been approved`);
@@ -139,14 +139,14 @@ async function decide(conn, { docType, docId, action, userId, note, enforce = tr
   // rule rather than a security one — but signing twice yourself is
   // the one thing it will not let through even so.
   if (enforce && !userId) {
-    throw conflict('A signature needs a signatory — say who you are working as');
+    throw conflict('An approval needs to know who is approving — sign in first');
   }
   if (enforce && !(await canSign(chain, userId))) {
     const same = [chain.level1_by, chain.level2_by].filter(Boolean).map(Number)
       .includes(Number(userId));
     throw conflict(same
-      ? 'You have already signed this document once; the second level is somebody else\'s'
-      : 'This is not yours to sign at this level');
+      ? 'You approved this at level 1; level 2 has to be somebody else'
+      : 'This is not yours to approve at this level');
   }
 
   const level = Number(chain.level);
@@ -174,23 +174,47 @@ async function decide(conn, { docType, docId, action, userId, note, enforce = tr
   return { done: last, returned: false, level, levels: LEVELS };
 }
 
-/** The trail, for a document's own screen. */
-async function trail(docType, docId) {
+/**
+ * The trail, for a document's own screen.
+ *
+ * `waitingOn` says which desk it is on — 'GM' or 'MANAGEMENT' — and
+ * `waitingOnNames` who is sitting at it, worked out the same way the
+ * chain routes it (a site with no GM goes to Management), so a screen
+ * can say "with Kavya Reddy" instead of leaving people to guess.
+ * `canApprove` says whether the person looking (`userId`) is one of
+ * them — a screen offers Approve to them and to nobody else.
+ */
+async function trail(docType, docId, userId) {
   const chain = await chainOf(docType, docId);
   if (!chain) return null;
   const events = await many(
     `SELECT e.level, e.action, e.note, e.created_at, u.name AS by_name
        FROM approval_chain_events e LEFT JOIN users u ON u.id = e.user_id
       WHERE e.chain_id = ? ORDER BY e.created_at, e.id`, [chain.id]);
+
+  const pending = chain.status === 'PENDING';
+  let waitingOn = null;
+  let waitingOnNames = [];
+  let canApprove = false;
+  if (pending) {
+    const who = await approvers(chain);
+    canApprove = Boolean(userId) && who.includes(Number(userId));
+    const site = chain.site_id
+      ? await one(`SELECT gm_user_id FROM sites WHERE id = ?`, [chain.site_id]) : null;
+    waitingOn = Number(chain.level) === 1 && TYPES[chain.doc_type].firstLevel === 'GM'
+      && site?.gm_user_id ? 'GM' : 'MANAGEMENT';
+    waitingOnNames = who.length
+      ? (await many(`SELECT name FROM users WHERE id IN (?) ORDER BY name`, [who])).map((u) => u.name)
+      : [];
+  }
   return {
     status: chain.status,
     level: Number(chain.level),
     levels: Number(chain.levels),
     waitingSince: chain.waiting_since,
-    waitingOn: chain.status === 'PENDING'
-      ? (Number(chain.level) === 1 && TYPES[chain.doc_type].firstLevel === 'GM'
-        ? 'the site GM' : 'Management')
-      : null,
+    waitingOn,
+    waitingOnNames,
+    canApprove,
     events: events.map((e) => ({
       level: Number(e.level), action: e.action, note: e.note,
       by: e.by_name, at: e.created_at,

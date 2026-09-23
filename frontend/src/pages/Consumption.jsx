@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHead, useApp } from '../App';
-import { api, qty, dmy, today } from '../api';
+import { api, qty, units, dmy, today, plural } from '../api';
 import {
-  useApi, useToast, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat,
+  useApi, useToast, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, DateField, Code,
 } from '../components/ui';
+import { Icon } from '../components/icons';
 import { useSite } from './SiteStore';
 
 /**
@@ -111,20 +112,19 @@ function PersonPicker({ siteId, value, onChange, label }) {
 
   return (
     <Field label={label}
-      hint={gone ? 'That person has nothing left to return' : undefined}>
+      hint={gone ? 'That person has nothing left to give back' : 'Only people holding material from this site are listed'}>
       <select className="inp" style={{ width: 300 }} value={value}
         disabled={!siteId || loading || !people.length}
         onChange={(e) => onChange(e.target.value)}>
         <option value="">
           {loading ? 'Loading…'
-            : people.length ? 'Who is returning it'
-              : 'Nobody at this site is holding anything'}
+            : people.length ? 'Choose the worker…'
+              : 'No worker at this site is holding anything'}
         </option>
         {gone && <option value={value}>{value}</option>}
         {people.map((p) => (
           <option key={p.name} value={p.name}>
-            {p.name} — {qty(p.open_qty)} units across {p.returnable_items} item
-            {p.returnable_items === 1 ? '' : 's'}
+            {p.name} — {qty(p.open_qty)} units across {plural(p.returnable_items, 'item')}
           </option>
         ))}
       </select>
@@ -184,10 +184,10 @@ function ShelfPicker({ path, deps, exclude, onPick, placeholder, empty }) {
             </button>
           )) : (
             <button type="button" disabled style={{ color: 'var(--muted)' }}>
-              <b>{q.trim() ? 'Nothing here matches that' : (empty?.title || 'Nothing available')}</b>
+              <b>{q.trim() ? 'No item here matches that' : (empty?.title || 'Nothing available')}</b>
               <small>
                 {q.trim() ? 'Try part of the code, or fewer words'
-                  : (empty?.hint || 'Only what this site actually holds can be issued')}
+                  : (empty?.hint || 'Only what is in this site\'s stock can be issued')}
               </small>
             </button>
           )}
@@ -210,8 +210,8 @@ function Basket({ rows, setRows, capKey, capLabel }) {
       <table>
         <thead>
           <tr>
-            <th>Code</th><th>Item</th><th style={{ width: 52 }}>Unit</th>
-            <th className="rt" style={{ width: 110 }}>{capLabel}</th>
+            <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
+            <th className="rt" style={{ width: 120 }}>{capLabel}</th>
             <th className="rt" style={{ width: 130 }}>Quantity</th>
             <th>Remark</th>
             <th style={{ width: 40 }} />
@@ -223,14 +223,14 @@ function Basket({ rows, setRows, capKey, capLabel }) {
             const over = num(r.qty) > cap + 0.0005;
             return (
               <tr key={r.item_id}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                <td><Code>{r.item_code}</Code></td>
                 <td><b>{r.item_name}</b></td>
                 <td>{r.uom}</td>
                 <td className="rt mono">{qty(cap)}</td>
                 <td>
-                  <input className="inp rt mono" type="number" min="0" step="0.001"
-                    value={r.qty}
-                    style={over ? { borderColor: 'var(--bad)', color: 'var(--bad)' } : undefined}
+                  <input className="inp rt mono" type="number" min="0" step="0.001" inputMode="decimal"
+                    value={r.qty} aria-label={`Quantity of ${r.item_name}`} aria-invalid={over || undefined}
+                    style={over ? { borderColor: 'var(--st-stop)', color: 'var(--st-stop)' } : undefined}
                     onChange={(e) => set(r.item_id, { qty: e.target.value })} />
                 </td>
                 <td>
@@ -239,15 +239,15 @@ function Basket({ rows, setRows, capKey, capLabel }) {
                 </td>
                 <td>
                   <button className="btn sm" onClick={() => drop(r.item_id)}
-                    aria-label={`Remove ${r.item_name}`}>✕</button>
+                    aria-label={`Remove ${r.item_name}`}><Icon name="x" size={14} /></button>
                 </td>
               </tr>
             );
           })}
           {!rows.length && (
             <tr><td colSpan={7}>
-              <Empty title="Nothing on this document yet">
-                Search above and pick the items.
+              <Empty title="No items added yet">
+                Search above and choose the items.
               </Empty>
             </td></tr>
           )}
@@ -264,7 +264,7 @@ function problems(rows, capKey, capWord) {
   for (const r of rows) {
     const q = num(r.qty);
     const cap = Number(r[capKey]);
-    if (q <= 0) out.push(`${r.item_code} — put a quantity against it.`);
+    if (q <= 0) out.push(`${r.item_code} — type a quantity.`);
     else if (q > cap + 0.0005) {
       out.push(`${r.item_code} — only ${qty(cap)} ${r.uom} ${capWord}.`);
     }
@@ -314,7 +314,7 @@ export function IssueStock() {
           itemId: x.item_id, qty: num(x.qty), remark: x.remark?.trim() || undefined,
         })),
       });
-      toast(`${r.docNo} — ${qty(r.issuedQty)} units issued to ${head.issuedTo.trim()}`, 'ok');
+      toast(`${r.docNo} — ${units(r.issuedQty)} issued to ${head.issuedTo.trim()}`, 'ok');
       setDone(r);
       setRows([]);
       setHead((h) => ({ ...h, issuedTo: '', purpose: '', note: '' }));
@@ -332,13 +332,13 @@ export function IssueStock() {
     const site = (allSites || []).find((x) => x.id === Number(siteId));
     return (
       <>
-        <PageHead title="Issue for consumption"
-          sub="Material leaving the site store in someone's hands" />
+        <PageHead title="Issue to worker"
+          sub="Material leaving site stock in a worker's hands" />
         <div className="page-body">
-          <Banner kind="warn" icon="!">
+          <Banner kind="warn">
             Only the store keeper of {site?.name || 'this site'}
             {site?.keeper ? <> — <b>{site.keeper.name}</b> —</> : ''} can issue its material.
-            You can still see what was issued under Site › Transactions.
+            What was issued is listed under Site › Transactions.
           </Banner>
         </div>
       </>
@@ -347,70 +347,65 @@ export function IssueStock() {
 
   return (
     <>
-      <PageHead title="Issue for consumption"
-        sub="Material leaving the site store in someone's hands"
-        actions={<div style={{ display: 'flex', gap: 9 }}>
-          <Link className="btn" to={`/site/returns?site=${siteId}`}>Record a return</Link>
-          <Link className="btn" to={`/site/stock?site=${siteId}`}>Site store</Link>
-        </div>} />
+      <PageHead title="Issue to worker"
+        sub="Material leaving site stock in a worker's hands. Once issued it counts as consumed."
+        actions={<>
+          <Link className="btn" to="/site/returns">Take back from worker</Link>
+          <Link className="btn" to="/site/stock">Site stock</Link>
+        </>} />
 
       <div className="page-body">
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Issued on">
-              <input className="inp" type="date" style={{ width: 160 }} value={head.usedOn}
-                max={today()}
-                onChange={(e) => setHead((h) => ({ ...h, usedOn: e.target.value }))} />
-            </Field>
-            <PersonInput siteId={siteId} label="Issued to" value={head.issuedTo}
+            <DateField label="Issued on" value={head.usedOn} max={today()}
+              onChange={(e) => setHead((h) => ({ ...h, usedOn: e.target.value }))} />
+            <PersonInput siteId={siteId} label="Issued to (worker's name)" value={head.issuedTo}
               onChange={(v) => setHead((h) => ({ ...h, issuedTo: v }))} />
             <Field label="What for">
               <input className="inp" style={{ width: 280 }} value={head.purpose}
-                placeholder="Block A first floor, optional"
+                placeholder="e.g. Block A, first floor (optional)"
                 onChange={(e) => setHead((h) => ({ ...h, purpose: e.target.value }))} />
             </Field>
           </div>
         </Card>
 
         {done && (
-          <Banner kind="ok" icon="✓"
-            action={<Link className="btn sm" to={`/site/transactions?site=${siteId}`}>
-              See it on the ledger
-            </Link>}>
-            <b>{done.docNo}</b> issued — {qty(done.issuedQty)} units.
-            They are off the shelf and counted as consumed.
+          <Banner kind="ok"
+            action={<Link className="btn sm" to="/site/transactions">See it in Transactions</Link>}>
+            <Code as="b">{done.docNo}</Code> issued — {qty(done.issuedQty)} units.
+            They are out of site stock and counted as consumed.
           </Banner>
         )}
 
         {empty && (
-          <Banner kind="warn" icon="◍"
+          <Banner kind="warn"
             action={toSign > 0
-              ? <Link className="btn sm pri" to={`/site/inbox?site=${siteId}`}>Sign for them</Link>
-              : <Link className="btn sm" to="/indents">See where it is</Link>}>
-            <b>This site is holding nothing yet.</b>{' '}
+              ? <Link className="btn sm pri" to="/site/inbox">Receive deliveries</Link>
+              : <Link className="btn sm" to="/indents">See where your PRNs are</Link>}>
+            <b>This site's stock is empty.</b>{' '}
             {toSign > 0
-              ? `${toSign} delivery${toSign === 1 ? '' : 'ies'} ${toSign === 1 ? 'is' : 'are'} `
-                + 'waiting to be signed for — material only reaches the shelf once the site '
-                + 'has acknowledged it.'
-              : 'Material reaches this shelf when the site signs for a delivery. Anything '
-                + 'the store has received against your PRN still has to be sent out on a '
-                + 'challan and signed for here.'}
+              ? `${plural(toSign, 'delivery', 'deliveries')} ${toSign === 1 ? 'is' : 'are'} `
+                + 'waiting to be received — material reaches site stock only when the site '
+                + 'confirms receipt.'
+              : 'Material reaches site stock when the site confirms receipt of a delivery. '
+                + 'Anything the store has received for your PRN still has to be dispatched '
+                + 'on a delivery challan and received here.'}
           </Banner>
         )}
 
-        <Card title="What is going out"
-          sub="Only what this site is actually holding can be issued">
+        <Card title="Items being issued"
+          sub="Only what is in this site's stock can be issued">
           <div className="pad" style={{ paddingBottom: 0 }}>
             <Field label="Add an item">
               <ShelfPicker
                 path={siteId ? `/consumption/issuable/${siteId}` : null}
                 deps={[siteId]}
                 exclude={rows.map((r) => r.item_id)}
-                placeholder="Search this site's shelf by name or code"
+                placeholder="Search this site's stock by name or code…"
                 onPick={(it) => setRows((xs) => [...xs, { ...it, qty: '', remark: '' }])} />
             </Field>
           </div>
-          <Basket rows={rows} setRows={setRows} capKey="on_hand" capLabel="On site" />
+          <Basket rows={rows} setRows={setRows} capKey="on_hand" capLabel="In site stock" />
         </Card>
 
         {bad.length > 0 && rows.length > 0 && (
@@ -423,17 +418,22 @@ export function IssueStock() {
         <Card>
           <div className="pad" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>
+              <div style={{ fontSize: 20, fontWeight: 600 }}>
                 {qty(units)} <span style={{ fontSize: 14, fontWeight: 500 }}>units</span>
               </div>
-              <div style={{ color: 'var(--muted)', fontSize: 12 }}>
-                across {rows.length} line{rows.length === 1 ? '' : 's'} · off the shelf the
-                moment you issue, and counted as consumed from {dmy(head.usedOn)}
+              <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                across {plural(rows.length, 'line')} · out of site stock the moment you issue,
+                and counted as consumed from {dmy(head.usedOn)}
               </div>
             </div>
             <div className="sp" />
+            {!ready && !saving && (
+              <span className="why-not">
+                {!head.issuedTo.trim() ? 'Type who it is issued to' : !rows.length ? 'Add an item' : 'Fix the quantities above'}
+              </span>
+            )}
             <button className="btn pri" disabled={!ready} onClick={submit}>
-              {saving ? 'Issuing…' : 'Issue'}
+              {saving ? 'Issuing…' : 'Issue to worker'}
             </button>
           </div>
         </Card>
@@ -453,25 +453,24 @@ function RecentIssues({ state, siteId }) {
 
   return (
     <>
-      <Card title="Issued lately" sub="The last 25 from this site"
-        actions={<Link className="btn sm" to={`/site/transactions?site=${siteId}`}>
-          All transactions
-        </Link>}>
+      <Card title="Recently issued" sub="The last 25 issues from this site"
+        actions={<Link className="btn sm" to="/site/transactions">All transactions</Link>}>
         <div className="tw">
           <table>
             <thead>
               <tr>
-                <th>Document</th><th>Date</th><th>Issued to</th><th>What for</th>
+                <th>Issue slip</th><th>Date</th><th>Issued to</th><th>What for</th>
                 <th className="rt">Lines</th><th className="rt">Quantity</th>
                 <th>Recorded by</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.consumption_id} style={{ cursor: 'pointer' }}
-                  onClick={() => setOpen(r.consumption_id)}>
-                  <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.doc_no}</td>
-                  <td>{dmy(r.used_on)}</td>
+                <tr key={r.consumption_id} className="click" tabIndex={0}
+                  onClick={() => setOpen(r.consumption_id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setOpen(r.consumption_id); }}>
+                  <td><Code>{r.doc_no}</Code></td>
+                  <td className="mono">{dmy(r.used_on)}</td>
                   <td><b>{r.issued_to}</b></td>
                   <td style={{ color: 'var(--muted)' }}>{r.purpose || '—'}</td>
                   <td className="rt mono">{r.line_count}</td>
@@ -481,8 +480,8 @@ function RecentIssues({ state, siteId }) {
               ))}
               {!rows.length && (
                 <tr><td colSpan={7}>
-                  <Empty title="Nothing issued from this site yet">
-                    Material sits on the shelf until somebody takes it.
+                  <Empty title="Nothing has been issued from this site yet">
+                    Material stays in site stock until it is issued to a worker.
                   </Empty>
                 </td></tr>
               )}
@@ -497,7 +496,7 @@ function RecentIssues({ state, siteId }) {
 
 export function IssueCard({ id, onClose }) {
   const { data, loading } = useApi(`/consumption/issues/${id}`, [id]);
-  if (loading || !data) return <Modal title="Issue" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="Issue slip" onClose={onClose}><Loading what="the issue slip" /></Modal>;
   const { head, lines, withThem } = data;
 
   return (
@@ -505,23 +504,23 @@ export function IssueCard({ id, onClose }) {
       sub={`${head.site_name} · issued to ${head.issued_to} on ${dmy(head.used_on)}`}
       onClose={onClose}>
       <div className="stats">
-        <Stat n={qty(head.issued_qty)} label="units issued" />
-        <Stat n={head.line_count} label="items" />
+        <Stat n={qty(head.issued_qty)} label="units issued" one="unit issued" />
+        <Stat n={head.line_count} label="items" one="item" />
         <Stat n={dmy(head.used_on)} label="issued on" />
       </div>
-      {head.purpose && <Banner kind="info" icon="▸">{head.purpose}</Banner>}
+      {head.purpose && <Banner kind="info">For: {head.purpose}</Banner>}
       <div className="tw">
         <table>
           <thead>
             <tr>
-              <th>Code</th><th>Item</th><th style={{ width: 52 }}>Unit</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
               <th className="rt">Quantity</th><th>Remark</th>
             </tr>
           </thead>
           <tbody>
             {lines.map((l) => (
               <tr key={l.line_id}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.item_code}</td>
+                <td><Code>{l.item_code}</Code></td>
                 <td><b>{l.item_name}</b></td>
                 <td>{l.uom}</td>
                 <td className="rt mono"><b>{qty(l.qty)}</b></td>
@@ -533,17 +532,17 @@ export function IssueCard({ id, onClose }) {
       </div>
       {withThem.length > 0 && (
         <Card title={`Consumed by ${head.issued_to}`}
-          sub="Across every issue to them at this site, not just this one — issued less returned">
+          sub="Across every issue to them at this site, not just this one — issued less taken back">
           <div className="tw">
             <table>
               <thead>
-                <tr><th>Code</th><th>Item</th><th style={{ width: 52 }}>Unit</th>
+                <tr><th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
                   <th className="rt">Consumed</th></tr>
               </thead>
               <tbody>
                 {withThem.map((r) => (
                   <tr key={r.item_code}>
-                    <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                    <td><Code>{r.item_code}</Code></td>
                     <td>{r.item_name}</td>
                     <td>{r.uom}</td>
                     <td className="rt mono"><b>{qty(r.open_qty)}</b></td>
@@ -605,7 +604,7 @@ export function ReturnStock() {
           itemId: x.item_id, qty: num(x.qty), remark: x.remark?.trim() || undefined,
         })),
       });
-      toast(`${r.docNo} — ${qty(r.returnedQty)} units back on the shelf`, 'ok');
+      toast(`${r.docNo} — ${units(r.returnedQty)} back in site stock`, 'ok');
       setDone(r);
       setRows([]);
       setHead((h) => ({ ...h, returnedBy: '', reason: '' }));
@@ -619,46 +618,43 @@ export function ReturnStock() {
 
   return (
     <>
-      <PageHead title="Return to the site store"
-        sub="Material coming back unused"
-        actions={<div style={{ display: 'flex', gap: 9 }}>
-          <Link className="btn" to={`/site/issue?site=${siteId}`}>Issue material</Link>
-          <Link className="btn" to={`/site/stock?site=${siteId}`}>Site store</Link>
-        </div>} />
+      <PageHead title="Take back from worker"
+        sub="Unused material a worker brings back. It can never be more than they were issued."
+        actions={<>
+          <Link className="btn" to="/site/issue">Issue to worker</Link>
+          <Link className="btn" to="/site/stock">Site stock</Link>
+        </>} />
 
       <div className="page-body">
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Returned on">
-              <input className="inp" type="date" style={{ width: 160 }} value={head.returnedOn}
-                max={today()}
-                onChange={(e) => setHead((h) => ({ ...h, returnedOn: e.target.value }))} />
-            </Field>
-            <PersonPicker siteId={siteId} label="Returned by" value={head.returnedBy}
+            <DateField label="Brought back on" value={head.returnedOn} max={today()}
+              onChange={(e) => setHead((h) => ({ ...h, returnedOn: e.target.value }))} />
+            <PersonPicker siteId={siteId} label="Worker bringing it back" value={head.returnedBy}
               onChange={(v) => setHead((h) => ({ ...h, returnedBy: v }))} />
             <Field label="Why it came back">
               <input className="inp" style={{ width: 260 }} value={head.reason}
-                placeholder="Over-drawn, optional"
+                placeholder="e.g. took too much (optional)"
                 onChange={(e) => setHead((h) => ({ ...h, reason: e.target.value }))} />
             </Field>
           </div>
         </Card>
 
         {done && (
-          <Banner kind="ok" icon="✓">
-            <b>{done.docNo}</b> — {qty(done.returnedQty)} units are back on the shelf,
-            and off this site&apos;s consumption.
+          <Banner kind="ok">
+            <Code as="b">{done.docNo}</Code> — {qty(done.returnedQty)} units are back in site stock,
+            and no longer counted as consumed.
           </Banner>
         )}
 
-        <Card title="What is coming back"
+        <Card title="Items being taken back"
           sub={person
-            ? `What ${person} has taken and not returned`
-            : 'Choose who is returning it first'}>
+            ? `What ${person} was issued and has not brought back`
+            : 'Choose the worker first'}>
           <div className="pad" style={{ paddingBottom: 0 }}>
             <Field label="Add an item"
               hint={!listPath
-                ? 'The list is whatever that person took and has not brought back'
+                ? 'The list is what that worker was issued and has not brought back'
                 : undefined}>
               <ShelfPicker
                 path={listPath}
@@ -666,15 +662,15 @@ export function ReturnStock() {
                 exclude={rows.map((r) => r.item_id)}
                 placeholder={listPath
                   ? 'Search by name or code'
-                  : 'Choose who is returning it above'}
+                  : 'Choose the worker above first'}
                 empty={{
-                  title: `${person} has nothing to return`,
-                  hint: 'Everything issued to them has already come back.',
+                  title: `${person} has nothing to bring back`,
+                  hint: 'Everything issued to them has already been taken back.',
                 }}
                 onPick={(it) => setRows((xs) => [...xs, { ...it, qty: '', remark: '' }])} />
             </Field>
           </div>
-          <Basket rows={rows} setRows={setRows} capKey="open_qty" capLabel="They have" />
+          <Basket rows={rows} setRows={setRows} capKey="open_qty" capLabel="Issued to them" />
         </Card>
 
         {bad.length > 0 && rows.length > 0 && (
@@ -687,17 +683,20 @@ export function ReturnStock() {
         <Card>
           <div className="pad" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>
+              <div style={{ fontSize: 20, fontWeight: 600 }}>
                 {qty(units)} <span style={{ fontSize: 14, fontWeight: 500 }}>units</span>
               </div>
-              <div style={{ color: 'var(--muted)', fontSize: 12 }}>
-                across {rows.length} item{rows.length === 1 ? '' : 's'} · back on the shelf,
-                and off this site&apos;s consumption from {dmy(head.returnedOn)}
+              <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                across {plural(rows.length, 'item')} · back in site stock, and no longer counted
+                as consumed from {dmy(head.returnedOn)}
               </div>
             </div>
             <div className="sp" />
+            {!ready && !saving && (
+              <span className="why-not">{!person ? 'Choose the worker' : !rows.length ? 'Add an item' : 'Fix the quantities above'}</span>
+            )}
             <button className="btn pri" disabled={!ready} onClick={submit}>
-              {saving ? 'Recording…' : 'Record the return'}
+              {saving ? 'Saving…' : 'Take back'}
             </button>
           </div>
         </Card>
@@ -717,22 +716,23 @@ function RecentReturns({ state }) {
 
   return (
     <>
-      <Card title="Returned lately" sub="The last 25 to this site">
+      <Card title="Recently taken back" sub="The last 25 at this site">
         <div className="tw">
           <table>
             <thead>
               <tr>
-                <th>Document</th><th>Date</th><th>Returned by</th><th>Why</th>
+                <th>Return slip</th><th>Date</th><th>Brought back by</th><th>Why</th>
                 <th className="rt">Lines</th><th className="rt">Quantity</th>
                 <th>Recorded by</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.return_id} style={{ cursor: 'pointer' }}
-                  onClick={() => setOpen(r.return_id)}>
-                  <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.doc_no}</td>
-                  <td>{dmy(r.returned_on)}</td>
+                <tr key={r.return_id} className="click" tabIndex={0}
+                  onClick={() => setOpen(r.return_id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setOpen(r.return_id); }}>
+                  <td><Code>{r.doc_no}</Code></td>
+                  <td className="mono">{dmy(r.returned_on)}</td>
                   <td><b>{r.returned_by}</b></td>
                   <td style={{ color: 'var(--muted)' }}>{r.reason || '—'}</td>
                   <td className="rt mono">{r.line_count}</td>
@@ -742,8 +742,8 @@ function RecentReturns({ state }) {
               ))}
               {!rows.length && (
                 <tr><td colSpan={7}>
-                  <Empty title="Nothing has come back to this site">
-                    A return puts material back on the shelf and takes its cost off the site.
+                  <Empty title="Nothing has been taken back at this site">
+                    Taking material back puts it into site stock and takes its cost off the site.
                   </Empty>
                 </td></tr>
               )}
@@ -758,31 +758,31 @@ function RecentReturns({ state }) {
 
 function ReturnCard({ id, onClose }) {
   const { data, loading } = useApi(`/consumption/returns/${id}`, [id]);
-  if (loading || !data) return <Modal title="Return" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="Return slip" onClose={onClose}><Loading what="the return slip" /></Modal>;
   const { head, lines } = data;
 
   return (
     <Modal wide title={head.doc_no}
-      sub={`${head.site_name} · returned by ${head.returned_by} on ${dmy(head.returned_on)}`}
+      sub={`${head.site_name} · brought back by ${head.returned_by} on ${dmy(head.returned_on)}`}
       onClose={onClose}>
       <div className="stats">
-        <Stat n={qty(head.returned_qty)} label="units back" />
-        <Stat n={head.line_count} label="items" />
-        <Stat n={dmy(head.returned_on)} label="returned on" />
+        <Stat n={qty(head.returned_qty)} label="units taken back" one="unit taken back" />
+        <Stat n={head.line_count} label="items" one="item" />
+        <Stat n={dmy(head.returned_on)} label="brought back on" />
       </div>
-      {head.reason && <Banner kind="info" icon="▸">{head.reason}</Banner>}
+      {head.reason && <Banner kind="info">Why: {head.reason}</Banner>}
       <div className="tw">
         <table>
           <thead>
             <tr>
-              <th>Code</th><th>Item</th><th style={{ width: 52 }}>Unit</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
               <th className="rt">Quantity</th><th>Remark</th>
             </tr>
           </thead>
           <tbody>
             {lines.map((l) => (
               <tr key={l.line_id}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.item_code}</td>
+                <td><Code>{l.item_code}</Code></td>
                 <td><b>{l.item_name}</b></td>
                 <td>{l.uom}</td>
                 <td className="rt mono"><b>{qty(l.qty)}</b></td>

@@ -106,8 +106,7 @@ describe('logins', () => {
 
     const me = (await call('/auth/me', { token: T.gm })).body.access;
     assert.equal(me.overseer, true);
-    assert.ok(me.writes.filter(([, ok]) => ok).every(([w]) => /decide/.test(w)),
-      'a GM writes only signatures');
+    assert.ok(me.writes.filter(([, ok]) => ok).every(([w]) => /decide/.test(w)), 'a GM writes only approvals');
   });
 
   test('a site login sees its own sites and raises nothing elsewhere', async (t) => {
@@ -116,6 +115,22 @@ describe('logins', () => {
     assert.deepEqual(seen, [S.b]);
     const r = await call('/indents', { token: T.vikram, method: 'POST',
       body: { siteId: S.a, indentDate: '2026-09-23', lines: [] } });
+    assert.equal(r.status, 403);
+  });
+
+  test('the browser gets the write rules in order, so a site is never offered an approval', async (t) => {
+    if (!live) return t.skip('no database');
+    const me = (await call('/auth/me', { token: T.vikram })).body.access;
+    // what api.js canWrite does: the first rule that matches decides
+    const may = (path) => {
+      const rule = me.writes.find(([re]) => new RegExp(re).test(path));
+      return rule ? rule[1] : false;
+    };
+    assert.equal(may('/indents/5'), true, 'the site edits its own PRN');
+    assert.equal(may('/indents/5/decide'), false, 'approving it is for the GM and Management');
+    assert.equal(may('/expenses/5/decide'), false);
+    // and the server agrees
+    const r = await call('/indents/1/decide', { token: T.vikram, method: 'POST', body: { action: 'APPROVED' } });
     assert.equal(r.status, 403);
   });
 

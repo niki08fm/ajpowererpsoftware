@@ -232,10 +232,10 @@ const describe = (user, scope) => ({
   overseer: OVERSEERS.includes(user.department),
   siteIds: scope.siteIds ? [...scope.siteIds] : null,
   keeperOf: scope.keeperOf,
-  // every write rule in order, with whether this role passes it, so a
-  // button asks the same first-match question the server will — a
-  // broad "Site writes /indents" must not let a Site login see the
-  // Approve button that the narrower signature rule above it reserves
+  // every write rule, in the server's order, with this login's verdict,
+  // so a button asks the same question the server will. Only the
+  // allowed patterns would not do: first match wins, and /indents/:id/decide
+  // is caught by the approvals rule before the site's /indents rule.
   writes: WRITES.slice(1).map(([re, roles]) => [re.source, roles.includes(user.department)]),
 });
 

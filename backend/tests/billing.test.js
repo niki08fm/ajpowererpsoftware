@@ -103,7 +103,7 @@ describe('billing', () => {
       siteId: S.site, billDate: '2026-09-30',
       lines: [{ woLineId: S.wl1, qty: 10 }] } });
     assert.equal(bill.status, 409);
-    assert.match(bill.body.error.message, /no material has been indented for/);
+    assert.match(bill.body.error.message, /no material has been requested on a PRN/);
     assert.equal(bill.body.error.detail.limitedBy, 'INDENTED');
   });
 
@@ -139,7 +139,7 @@ describe('billing', () => {
       siteId: S.site, billDate: '2026-09-30',
       lines: [{ woLineId: S.wl1, qty: 80 }] } });
     assert.equal(r.status, 409);
-    assert.match(r.body.error.message, /60 .* has been indented for/);
+    assert.match(r.body.error.message, /60 .* has been requested on PRNs/);
     assert.equal(r.body.error.detail.limitedBy, 'INDENTED');
   });
 
@@ -212,7 +212,7 @@ describe('billing', () => {
       siteId: S.site, billDate: '2026-10-31',
       lines: [{ woLineId: S.wl1, qty: 50 }] } });
     assert.equal(r.status, 409);
-    assert.match(r.body.error.message, /100 .* has been indented for/);
+    assert.match(r.body.error.message, /100 .* has been requested on PRNs/);
     assert.equal(r.body.error.detail.limitedBy, 'INDENTED');
   });
 
@@ -435,7 +435,7 @@ describe('billing', () => {
       siteId: S.site, billDate: '2026-11-30',
       lines: [{ woLineId: S.wl2, qty: 40 }] } });
     assert.equal(tooMuch.status, 409);
-    assert.match(tooMuch.body.error.message, /50 .* has been indented for/);
+    assert.match(tooMuch.body.error.message, /50 .* has been requested on PRNs/);
     assert.equal(tooMuch.body.error.detail.limitedBy, 'INDENTED');
   });
 

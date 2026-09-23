@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, canWrite } from '../api';
+import { api, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
   useApi, Card, Field, Tag, Empty, Loading, ErrorNote, Banner, Modal, Stat, useToast,
@@ -64,7 +64,7 @@ export default function Clients() {
         {data && (
           <Card className="pad">
             <div className="stats">
-              <Stat n={data.length} label="clients" />
+              <Stat n={data.length} label="clients" one="client" />
               {(branches || []).map((b) => (
                 <Stat key={b.id} n={data.filter((c) => c.branch_id === b.id).length} label={b.name} />
               ))}
@@ -106,7 +106,7 @@ export default function Clients() {
                         <b>{c.name}</b>
                         {c.address && <small>{c.address}</small>}
                       </td>
-                      <td><Tag kind="brand">{c.branch_name}</Tag></td>
+                      <td><span className="tag kind">{c.branch_name}</span></td>
                       <td className="mono">{c.gstin || <span style={{ color: 'var(--faint)' }}>—</span>}</td>
                       <td>
                         {c.contact_name || <span style={{ color: 'var(--faint)' }}>—</span>}
@@ -200,7 +200,7 @@ function EditClient({ client, branches, onClose, onSaved }) {
     <Modal title={isNew ? 'Add a client' : client.name}
       sub={isNew
         ? 'The branch decides which sites may be given this client'
-        : `${client.branch_name}${hasSites ? ` · ${client.site_count} site(s)` : ' · no sites yet'}`}
+        : `${client.branch_name}${hasSites ? ` · ${plural(client.site_count, 'site')}` : ' · no sites yet'}`}
       onClose={onClose}
       footer={
         <>

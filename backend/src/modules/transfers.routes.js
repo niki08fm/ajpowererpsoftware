@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { badRequest, conflict, notFound } = require('../lib/errors');
 const chain = require('../lib/approvals');
+const { plural } = require('../lib/words');
 
 /**
  * Sourcing a PRN from another site.
@@ -471,7 +472,7 @@ router.post('/site/:siteId/reorder',
     }
 
     const out = await tx(async (conn) => {
-      const docNo = await nextDocNo(conn, 'IND', req.body.indentDate);
+      const docNo = await nextDocNo(conn, 'PRN', req.body.indentDate);
       const r = await run(
         `INSERT INTO indents (doc_no, site_id, branch_id, boq_id, kind, indent_date,
                               needed_by, status, raised_by)
@@ -497,7 +498,7 @@ router.post('/site/:siteId/reorder',
       }
       await log(conn, { entity: 'INDENT', entityId: r.insertId, docNo,
         action: 'Raised to replace lent stock',
-        detail: `${req.body.lines.length} item(s) — does not count against the BOQ`,
+        detail: `${plural(req.body.lines.length, 'item')} — does not count against the BOQ`,
         user: req.user });
       return { id: r.insertId, docNo };
     });

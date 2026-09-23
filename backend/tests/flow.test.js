@@ -386,7 +386,7 @@ describe('planning and site', () => {
     const [rows] = await pool.query(`SELECT doc_type, fy, last_no FROM doc_counters ORDER BY doc_type`);
     const byType = Object.fromEntries(rows.map((r) => [r.doc_type, r]));
     assert.equal(byType.WO.fy, '26-27');
-    assert.ok(Number(byType.IND.last_no) >= 1);
+    assert.ok(Number(byType.PRN.last_no) >= 1, 'a PRN is numbered PRN/…');
   });
 
 

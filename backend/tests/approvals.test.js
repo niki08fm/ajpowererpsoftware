@@ -149,4 +149,57 @@ describe('approvals inbox', () => {
     assert.equal((await as(IMRAN)('/approvals/count')).body.waiting, 1, "B's PRN is still with Imran");
     assert.equal((await as(ANIL)('/approvals/count')).body.waiting, 0, 'Anil has cleared his desk');
   });
+
+  /* ---------------- whose desk: said by name, not left as "Waiting" */
+
+  test('a PRN is numbered PRN/, the name everybody uses for it', async (t) => {
+    if (!live) return t.skip('no database');
+    const a = (await as(RAVI)(`/indents/${S.prnA}`)).body;
+    assert.match(a.docNo, /^PRN\/\d\d-\d\d\/\d{4}$/);
+  });
+
+  test('a PRN says whose desk it is on, by level and by name', async (t) => {
+    if (!live) return t.skip('no database');
+    // A's GM approved level 1, so it is on Management's desk — and not
+    // on the desk of the man who already approved it
+    const a = (await as(RAVI)(`/indents/${S.prnA}`)).body;
+    assert.equal(a.approval.waitingOn, 'MANAGEMENT');
+    assert.equal(a.approval.level, 2);
+    assert.ok(a.approval.waitingOnNames.length >= 1);
+    assert.ok(!a.approval.waitingOnNames.includes('Anil Menon'));
+
+    // B is still with its own GM
+    const b = (await as(RAVI)(`/indents/${S.prnB}`)).body;
+    assert.equal(b.approval.waitingOn, 'GM');
+    assert.deepEqual(b.approval.waitingOnNames, ['Imran Sheikh']);
+
+    // and the list answers the same without opening each one
+    const list = (await as(RAVI)('/indents')).body.indents;
+    assert.equal(list.find((r) => r.id === S.prnA).waiting_on, 'MANAGEMENT');
+    const rowB = list.find((r) => r.id === S.prnB);
+    assert.equal(rowB.waiting_on, 'GM');
+    assert.equal(rowB.gm_name, 'Imran Sheikh');
+    assert.equal(rowB.stage, 'NOT_APPROVED', 'no material moves before approval');
+  });
+
+  test('approve is offered to the person it waits on, and to nobody else', async (t) => {
+    if (!live) return t.skip('no database');
+    const offered = async (who, id) => (await as(who)(`/indents/${id}`)).body.approval.canApprove;
+    assert.equal(await offered(IMRAN, S.prnB), true, 'B waits on its GM');
+    assert.equal(await offered(RAVI, S.prnB), false, 'not the site that raised it');
+    assert.equal(await offered(ANIL, S.prnA), false, 'Anil approved level 1, so level 2 is somebody else');
+    assert.equal(await offered(6, S.prnA), true, 'the other Management login');
+  });
+
+  test('a PRN sent back carries who sent it back and why', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = await as(IMRAN)(`/indents/${S.prnB}/decide`, { method: 'POST',
+      body: { action: 'RETURNED', note: 'Split this by floor' } });
+    assert.equal(r.status, 200);
+    const row = (await as(RAVI)('/indents')).body.indents.find((x) => x.id === S.prnB);
+    assert.equal(row.status, 'RETURNED');
+    assert.equal(row.waiting_on, null, 'on nobody\'s desk but the raiser\'s');
+    assert.equal(row.sent_back_by, 'Imran Sheikh');
+    assert.equal(row.sent_back_note, 'Split this by floor');
+  });
 });

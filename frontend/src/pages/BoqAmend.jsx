@@ -1,9 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, qty, dmy } from '../api';
+import { api, qty, dmy, plural } from '../api';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Modal, Field, Banner, useToast,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Modal, Field, Banner, useToast, Code, Status,
 } from '../components/ui';
+import { prnApproval } from '../vocab';
 
 const n3 = (v) => Math.round(Number(v || 0) * 1000) / 1000;
 
@@ -53,7 +54,7 @@ export function AmendSheet({ boqId, onClose, onDone }) {
   const save = async () => {
     if (!touched.length) return toast('Type a quantity against at least one work order line', 'bad');
     if (broken.length) return toast('A cut cannot leave a line at nothing', 'bad');
-    if (reason.trim().length < 5) return toast('Say why the quantity changed', 'bad');
+    if (reason.trim().length < 5) return toast('Type why the quantity changed', 'bad');
     setBusy(true);
     try {
       const r = await api.post(`/boq/${boqId}/amendments`, {
@@ -64,7 +65,7 @@ export function AmendSheet({ boqId, onClose, onDone }) {
       });
       toast(r.state === 'LOCKED'
         ? `${data.docNo} amended and back in line`
-        : `${data.docNo} amended — ${r.overLines} line(s) still over`, 'ok');
+        : `${data.docNo} amended — ${plural(r.overLines, 'line')} still past the estimate`, 'ok');
       onDone?.();
       onClose();
     } catch (e) { toast(e.message, 'bad'); }
@@ -90,7 +91,7 @@ export function AmendSheet({ boqId, onClose, onDone }) {
       footer={<>
         <span style={{ color: 'var(--muted)', fontSize: 12.5, marginRight: 'auto' }}>
           {touched.length
-            ? `${touched.length} work order line(s) amended`
+            ? `${plural(touched.length, 'work order line')} amended`
             : 'Type against a work order line to amend it'}
         </span>
         <button className="btn" onClick={onClose}>Cancel</button>
@@ -106,26 +107,26 @@ export function AmendSheet({ boqId, onClose, onDone }) {
       </Banner>
 
       {data.state === 'AMENDMENT_DUE' && (
-        <Banner kind="bad" icon="▲">
-          This BOQ has been indented past its estimate. Raising the line to cover what was actually
+        <Banner kind="warn">
+          PRNs on this BOQ have gone past its estimate. Raising the line to cover what was actually
           asked for is what brings it back in line.
         </Banner>
       )}
 
-      <Card title="BOQ (Bill of Quantity)"
-        sub="Amend By is the only column you type. BOQ Qty and Est Qty follow from it.">
+      <Card title="BOQ (bill of quantities)"
+        sub="“Change by” is the only column you type. BOQ qty and the estimate follow from it.">
         <div className="tw">
           <table className="sheet">
             <thead>
               <tr>
-                <th style={{ width: 62 }}>Sl No</th>
-                <th style={{ width: 108 }}>Item Code</th>
+                <th style={{ width: 62 }}>Sl no</th>
+                <th style={{ width: 110 }}>Item code</th>
                 <th style={{ minWidth: 260 }}>Description</th>
                 <th style={{ width: 76 }}>Unit</th>
-                <th className="rt" style={{ width: 82 }}>Item Qty</th>
-                <th className="rt" style={{ width: 92 }}>BOQ Qty</th>
-                <th className="rt" style={{ width: 92 }}>Est Qty</th>
-                <th className="rt" style={{ width: 104 }}>Amend By</th>
+                <th className="rt" style={{ width: 82 }}>Item qty</th>
+                <th className="rt" style={{ width: 92 }}>BOQ qty</th>
+                <th className="rt" style={{ width: 92 }}>Estimate</th>
+                <th className="rt" style={{ width: 104 }}>Change by</th>
                 <th className="rt" style={{ width: 150 }}>Becomes</th>
               </tr>
             </thead>
@@ -140,7 +141,7 @@ export function AmendSheet({ boqId, onClose, onDone }) {
                       <td>
                         <b>{w.description}</b>
                         <small>
-                          work order line · {w.item_count} item(s)
+                          Work order line · {plural(w.item_count, 'item')}
                           {Number(w.var_qty) !== 0
                             && ` · contracted ${qty(w.contracted_qty)}, amended by ${Number(w.var_qty) > 0 ? '+' : ''}${qty(w.var_qty)}`}
                         </small>
@@ -151,7 +152,8 @@ export function AmendSheet({ boqId, onClose, onDone }) {
                       <td className="rt mono">{qty(w.effective_est)}</td>
                       <td className="rt">
                         <input
-                          className="inp rt" type="number" step="any" placeholder="+ / −"
+                          className="inp rt" type="number" step="any" placeholder="+ / −" inputMode="decimal"
+                          aria-label={`Change to work order line ${w.sno}: plus to add, minus to cut`}
                           value={by[w.boq_wo_line_id] ?? ''}
                           onChange={(e) => setBy((x) => ({ ...x, [w.boq_wo_line_id]: e.target.value }))}
                         />
@@ -159,8 +161,8 @@ export function AmendSheet({ boqId, onClose, onDone }) {
                       <td className="rt mono">
                         {p ? (
                           p.leavesNothing
-                            ? <Tag kind="bad">leaves nothing</Tag>
-                            : <><b>{qty(p.newQty)}</b><small>est {qty(p.newEst)}</small></>
+                            ? <Status tone="stopped" label="Leaves nothing" hint="A cut cannot take a line to zero" />
+                            : <><b>{qty(p.newQty)}</b><small>estimate {qty(p.newEst)}</small></>
                         ) : <span style={{ color: 'var(--faint)' }}>—</span>}
                       </td>
                     </tr>
@@ -170,7 +172,7 @@ export function AmendSheet({ boqId, onClose, onDone }) {
                       return (
                         <tr key={i.boq_line_id} className="kid">
                           <td>{i.sno}</td>
-                          <td className="mono" style={{ color: 'var(--brand-ink)' }}>{i.item_code}</td>
+                          <td><Code>{i.item_code}</Code></td>
                           <td>{i.item_name}</td>
                           <td>{i.uom}</td>
                           <td className="rt mono">{qty(i.item_qty)}</td>
@@ -243,9 +245,9 @@ export function BoqHistory({ boqId, onClose }) {
     try {
       const full = await api.get(`/indents/${ind.id}`);
       download(`${ind.doc_no.replace(/\//g, '-')}.csv`, csv([
-        ['Indent', ind.doc_no], ['Site', data.site.name], ['Raised', dmy(ind.indent_date)],
+        ['PRN', ind.doc_no], ['Site', data.site.name], ['Raised', dmy(ind.indent_date)],
         ['Needed by', ind.needed_by ? dmy(ind.needed_by) : ''], ['Status', ind.status], [],
-        ['Sl No', 'Item code', 'Item', 'Qty', 'Estimate', 'Past estimate'],
+        ['Sl no', 'Item code', 'Item', 'Qty', 'Estimate', 'Past estimate'],
         ...full.lines.map((l) => [
           l.sno, l.item_code, l.item_name, l.qty, l.effective_est, l.over_qty,
         ]),
@@ -265,7 +267,7 @@ export function BoqHistory({ boqId, onClose }) {
 
   const tabs = [
     ['amendments', `Amendments (${amendments?.length || 0})`],
-    ['indents', `Indents (${data.indents.length})`],
+    ['indents', `PRNs (${data.indents.length})`],
     ['trail', `Trail (${data.events.length})`],
   ];
 
@@ -292,7 +294,7 @@ export function BoqHistory({ boqId, onClose }) {
               <table>
                 <thead>
                   <tr>
-                    <th style={{ width: 62 }}>Sl No</th><th>Line</th><th style={{ width: 76 }}>Unit</th>
+                    <th style={{ width: 62 }}>Sl no</th><th>Line</th><th style={{ width: 76 }}>Unit</th>
                     <th className="rt" style={{ width: 90 }}>Was</th>
                     <th className="rt" style={{ width: 100 }}>Change</th>
                     <th className="rt" style={{ width: 90 }}>Became</th>
@@ -304,14 +306,14 @@ export function BoqHistory({ boqId, onClose }) {
                       <td className="sn">{l.sno}</td>
                       <td>{l.kind === 'WO_LINE'
                         ? <b>{l.description}</b>
-                        : <>{l.itemName}<small className="mono">{l.itemCode} · raised before amendments moved to the work order line</small></>}
+                        : <>{l.itemName}<small><Code>{l.itemCode}</Code> · recorded before amendments moved to the work order line</small></>}
                       </td>
                       <td>{l.uom || ''}</td>
                       <td className="rt mono">{l.from != null ? qty(l.from) : '—'}</td>
                       <td className="rt">
-                        <Tag kind={Number(l.qty) < 0 ? 'warn' : 'ok'}>
-                          {Number(l.qty) > 0 ? '+' : ''}{qty(l.qty)}
-                        </Tag>
+                        <span className="mono" style={{ fontWeight: 600 }}>
+                          {Number(l.qty) > 0 ? '+' : Number(l.qty) < 0 ? '−' : ''}{qty(Math.abs(Number(l.qty)))}
+                        </span>
                       </td>
                       <td className="rt mono"><b>{l.to != null ? qty(l.to) : '—'}</b></td>
                     </tr>
@@ -328,13 +330,13 @@ export function BoqHistory({ boqId, onClose }) {
       )}
 
       {tab === 'indents' && (
-        <Card title="Raised against this BOQ" sub="Every indent, whatever became of it">
+        <Card title="PRNs raised against this BOQ" sub="Every PRN, whatever became of it">
           {data.indents.length ? (
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th>Indent</th><th>Raised</th><th>Needed by</th><th>By</th>
+                    <th>PRN</th><th>Raised</th><th>Needed by</th><th>By</th>
                     <th className="rt">Lines</th><th className="rt">Qty</th>
                     <th>Status</th><th style={{ width: 160 }} />
                   </tr>
@@ -342,24 +344,21 @@ export function BoqHistory({ boqId, onClose }) {
                 <tbody>
                   {data.indents.map((i) => (
                     <tr key={i.id}>
-                      <td><b className="mono">{i.doc_no}</b></td>
-                      <td>{dmy(i.indent_date)}</td>
-                      <td>{i.needed_by ? dmy(i.needed_by) : '—'}</td>
+                      <td><Code as="b">{i.doc_no}</Code></td>
+                      <td className="mono">{dmy(i.indent_date)}</td>
+                      <td className="mono">{i.needed_by ? dmy(i.needed_by) : '—'}</td>
                       <td>{i.raised_by_name || '—'}</td>
                       <td className="rt mono">{i.line_count}</td>
                       <td className="rt mono">{qty(i.total_qty)}</td>
                       <td>
-                        {i.status === 'APPROVED' ? <Tag kind="ok">Approved</Tag>
-                          : i.status === 'SUBMITTED' ? <Tag kind="warn">Waiting</Tag>
-                            : i.status === 'RETURNED' ? <Tag kind="bad">Returned</Tag>
-                              : <Tag>Draft</Tag>}
+                        <Status is={prnApproval(i)} />
                         {i.severity !== 'none' && (
-                          <Tag kind={i.severity}>▲ {i.over_lines} over</Tag>
+                          <small><Status tone="attention" icon="alert" label={`${i.over_lines} past the estimate`} /></small>
                         )}
                       </td>
                       <td className="rt">
                         <button className="btn sm" onClick={() => { onClose(); nav(`/indents/${i.id}`); }}>
-                          View
+                          Open PRN
                         </button>{' '}
                         <button className="btn sm" onClick={() => grab(i)}>Download</button>
                       </td>
@@ -370,7 +369,7 @@ export function BoqHistory({ boqId, onClose }) {
             </div>
           ) : (
             <Empty title="Nothing raised yet">
-              This BOQ is locked and ready; no site has indented against it.
+              This BOQ is locked and ready; no PRN has been raised against it yet.
             </Empty>
           )}
         </Card>

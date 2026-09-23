@@ -1,10 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { qty, money, dmy, today, addDays, withBranch } from '../api';
+import { qty, money, dmy, today, addDays, withBranch, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Code,
 } from '../components/ui';
 import {
   TrendChart, RankBars, DonutChart, LineChart, StackedBars, HeatStrip, Treemap,
@@ -43,7 +43,7 @@ function useFilters(initial) {
 
 /** Site or all sites, and a window. Both reports want exactly this. */
 function Filters({ f, set, children, dates = true }) {
-  const { branchId } = useApp();
+  const { branchId, branchName } = useApp();
   const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const preset = (days) => set({ from: addDays(today(), -days), to: today() });
   const fy = () => {
@@ -57,7 +57,7 @@ function Filters({ f, set, children, dates = true }) {
         <Field label="Site">
           <select className="inp" style={{ width: 230 }} value={f.site}
             onChange={(e) => set({ site: e.target.value })}>
-            <option value="">Every site in this branch</option>
+            <option value="">{branchId ? `Every site in ${branchName}` : 'Every site, all branches'}</option>
             {(sites || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
@@ -198,7 +198,7 @@ function ClaimRows({ rows, showSite }) {
   return rows.map((r) => (
     <tr key={r.expense_id}>
       <td>{dmy(r.spent_on)}</td>
-      <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.doc_no}</td>
+      <td><Code>{r.doc_no}</Code></td>
       <td>
         {showSite ? r.site_name
           : (r.paid_to || <span style={{ color: 'var(--muted)' }}>—</span>)}
@@ -329,7 +329,7 @@ export function ExpenseReport() {
       : 'all time';
     const rows = [
       ['EXPENSE REPORT'],
-      ['Site', d.site ? `${d.site.name} (${d.site.code})` : 'Every site in this branch'],
+      ['Site', d.site ? `${d.site.name} (${d.site.code})` : 'Every site in the chosen branch'],
       ...(d.site?.client_name ? [['Client', d.site.client_name]] : []),
       ['Period', window],
       [],
@@ -413,10 +413,9 @@ export function ExpenseReport() {
         {st.loading || !d ? <Loading /> : (
           <>
             {a?.pending?.claims > 0 && (
-              <Banner kind="warn" icon="…"
-                action={<Link className="btn sm" to="/site/expenses?status=WAITING">Decide them</Link>}>
+              <Banner kind="info" icon="clock">
                 <b>{money(a.pending.amount)}</b> across {a.pending.claims} claim
-                {a.pending.claims === 1 ? '' : 's'} is waiting to be approved and is in none of
+                {a.pending.claims === 1 ? '' : 's'} is with the GM for a decision and is in none of
                 these figures.
               </Banner>
             )}
@@ -427,7 +426,7 @@ export function ExpenseReport() {
                 foot={f.from
                   ? `${dmy(f.from)} to ${f.to ? dmy(f.to) : dmy(today())}`
                   : view.entries
-                    ? `${view.entries} entries across ${view.sites} site${view.sites === 1 ? '' : 's'}`
+                    ? `${plural(view.entries, 'entry', 'entries')} across ${plural(view.sites, 'site')}`
                     : 'all time'}
                 spark={view.spend} />
               <Kpi cap="Material consumed" value={money(view.t.material)}
@@ -601,7 +600,7 @@ function Statement({ d, showSite, f, bare }) {
             <ColHead cols={MATERIAL_COLS} />
             {d.material.rows.map((r) => (
               <tr key={r.item_id}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                <td><Code>{r.item_code}</Code></td>
                 <td colSpan={3}><b>{r.item_name}</b></td>
                 <td>{r.uom}</td>
                 <td className="rt mono"><b>{qty(r.qty)}</b></td>
@@ -740,7 +739,7 @@ export function ProfitLoss() {
 
   const grab = () => downloadCsv(`profit-and-loss${site ? `-${site.code || site.id}` : ''}`, [
     ['PROFIT AND LOSS'],
-    ['Scope', site ? site.name : `Every site in ${branch?.name || 'this branch'}`],
+    ['Scope', site ? site.name : (branch ? `Every site in ${branch.name}` : 'Every site, all branches')],
     [],
     ['Revenue — raised bills', data.revenue.total],
     ['  Supply', data.revenue.supply],
@@ -772,7 +771,7 @@ export function ProfitLoss() {
     <>
       <PageHead title="Profit and loss"
         sub={data?.available
-          ? `${site ? site.name : `Every site in ${branch?.name || 'this branch'}`}`
+          ? `${site ? site.name : (branch ? `Every site in ${branch.name}` : 'Every site, all branches')}`
             + ' — revenue from raised bills, less what the work cost'
           : 'Nothing has been billed in this scope yet'}
         actions={data?.available
@@ -793,7 +792,7 @@ export function ProfitLoss() {
                 <h2 style={{ margin: '0 0 8px', fontSize: 19 }}>
                   {site
                     ? `${site.name} has not been billed yet`
-                    : `No site in ${branch?.name || 'this branch'} has been billed yet`}
+                    : (branch ? `No site in ${branch.name} has been billed yet` : 'No site in any branch has been billed yet')}
                 </h2>
                 <p style={{
                   margin: '0 auto 20px', maxWidth: 470, color: 'var(--muted)', lineHeight: 1.7,
@@ -823,7 +822,7 @@ export function ProfitLoss() {
                   tone="ok" spark={view.revSpark} sparkTone="ok" />
                 <Kpi cap="Cost booked" value={money(data.cost.total)}
                   foot={`${money(data.cost.material)} material · ${money(data.cost.expense)} claims`}
-                  tone="warn" spark={view.costSpark} sparkTone="warn" />
+                  spark={view.costSpark} sparkTone="warn" />
                 <Kpi cap="Gross profit" value={money(data.profit.gross)}
                   foot={data.profit.gross >= 0
                     ? 'revenue less every booked cost'
@@ -1051,7 +1050,7 @@ export function ProfitLoss() {
                           <td className="rt mono">
                             {Number(r.bills)
                               ? money(r.revenue)
-                              : <Tag kind="warn">not billed</Tag>}
+                              : <span style={{ color: 'var(--faint)' }}>Not billed yet</span>}
                           </td>
                           <td className="rt mono">{money(r.cost)}</td>
                           <td className="rt mono">

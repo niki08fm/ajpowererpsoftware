@@ -11,6 +11,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 const env = require('./../config/env');
 const password = require('../lib/password');
+const { plural } = require('../lib/words');
 
 const files = (dir) =>
   fs.readdirSync(path.join(__dirname, dir)).filter((f) => f.endsWith('.sql')).sort();
@@ -82,7 +83,7 @@ async function setup({ fresh = false, quiet = false } = {}) {
       await conn.query('UPDATE users SET password_hash = ? WHERE id = ?',
         [await password.hash(env.trialPassword), u.id]);
     }
-    say(`  ${nopass.length} login(s) given the trial password "${env.trialPassword}"`);
+    say(`  ${plural(nopass.length, 'login')} given the trial password "${env.trialPassword}"`);
   }
 
   await conn.end();

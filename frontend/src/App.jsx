@@ -1,7 +1,10 @@
 import { createContext, useContext, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { api, setToken, getToken, whenSignedOut, setWrites } from './api';
-import { ToastHost, Loading, ErrorNote, Field, Modal, useToast } from './components/ui';
+import {
+  ToastHost, DialogHost, Loading, ErrorNote, Field, Modal, useToast, Status,
+} from './components/ui';
+import { Icon } from './components/icons';
 import { Chooser } from './pages/Choose';
 import { Approvals, Decided } from './pages/Approvals';
 
@@ -31,49 +34,44 @@ import IndentCart from './pages/IndentCart';
 import IndentDetail from './pages/IndentDetail';
 import Login from './pages/Login';
 import Users from './pages/Users';
+import { HowWorkMoves, Glossary } from './pages/Help';
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx);
 
 /**
- * Navigation: one sidebar, and nothing else.
+ * Navigation: one sidebar, every screen in it, nothing hidden.
  *
- * The old shell split the job in two — a rail of departments and a row
- * of tabs underneath — which meant the options for a department were
- * only visible once you were already inside it, and the screen you
- * wanted was two clicks and a guess away. Everything now lives in the
- * sidebar: the department, and every option under it, in one list you
- * can see at once.
+ * Trial 1 folded the monthly screens behind "+ N more", and people
+ * could not find what they could not see. Here every screen is listed;
+ * the ones used daily come first and the rest sit under a small caption
+ * in the same department, so the list stays readable without hiding
+ * anything.
  *
- * Each department carries a handful of options people use daily and,
- * behind "More", the ones they use monthly. That is where the clutter
- * went — nothing was deleted and every route still answers, but a
- * department opens showing five rows rather than twelve.
- *
- * The chevron by the logo halves the sidebar to icons. Collapsed, a
- * department's options arrive as a flyout on hover, so the shortest
- * width is still fully navigable.
- *
- * Accounts is named and greyed rather than hidden, so the shape of the
- * whole system is legible from day one.
+ * A screen's label here is also its page title — you arrive where you
+ * clicked, under the same name. The words come from vocab.js: PRN for
+ * the site's request, Receive for taking a delivery, Dispatch for the
+ * store sending, Issue for handing material to a worker.
  */
 export const SECTIONS = [
   {
     id: 'approvals',
     label: 'Approvals',
-    icon: '✓',
+    icon: 'inbox',
+    scope: 'person',
     screens: [
-      { to: '/approvals', label: 'Waiting on me', badge: 'approvals', end: true },
+      { to: '/approvals', label: 'Waiting on me', badge: 'approvals', badgeSays: 'waiting for your decision', end: true },
       { to: '/approvals/decided', label: 'Decided by me' },
     ],
   },
   {
     id: 'plan',
     label: 'Planning',
-    icon: '▤',
+    icon: 'clipboard',
+    caption: 'Setup',
     screens: [
       { to: '/sites', label: 'Sites' },
-      { to: '/boq', label: 'BOQ', badge: 'amendmentDue' },
+      { to: '/boq', label: 'BOQ', badge: 'amendmentDue', badgeSays: 'waiting for an amendment' },
       { to: '/clients', label: 'Clients' },
       { to: '/stores', label: 'Stores', more: true },
       { to: '/items', label: 'Item master', more: true },
@@ -82,77 +80,100 @@ export const SECTIONS = [
   {
     id: 'site',
     label: 'Site',
-    icon: '◍',
+    icon: 'helmet',
+    caption: 'Transfers & records',
     screens: [
-      { to: '/indents', label: 'Indents', badge: 'indentsWaiting' },
-      { to: '/site/inbox', label: 'Acknowledgements' },
-      { to: '/site/stock', label: 'Site store' },
-      { to: '/site/issue', label: 'Issue material' },
-      { to: '/site/expenses', label: 'Expenses', badge: 'expensesWaiting' },
-      { to: '/site/transfers', label: 'Transfers out', more: true },
-      { to: '/site/sent', label: 'Sent & reorder', more: true },
-      { to: '/site/returns', label: 'Returns', more: true },
+      { to: '/indents', label: 'PRNs', badge: 'indentsSentBack', badgeSays: 'sent back to the site' },
+      { to: '/site/inbox', label: 'Receive deliveries' },
+      { to: '/site/stock', label: 'Site stock' },
+      { to: '/site/issue', label: 'Issue to worker' },
+      { to: '/site/returns', label: 'Take back from worker' },
+      { to: '/site/expenses', label: 'Expenses', badge: 'expensesSentBack', badgeSays: 'sent back to the site' },
+      { to: '/site/transfers', label: 'Send to another site', more: true },
+      { to: '/site/sent', label: 'Sent to other sites', more: true },
       { to: '/site/transactions', label: 'Transactions', more: true },
       { to: '/site/consumption', label: 'Consumption', more: true },
-      { to: '/site/audit', label: 'Audit', more: true },
+      { to: '/site/audit', label: 'Audit trail', more: true },
     ],
   },
   {
     id: 'store',
     label: 'Store',
-    icon: '▥',
+    icon: 'store',
+    caption: 'Records & setup',
     screens: [
       { to: '/store/prns', label: 'PRNs to fulfil' },
-      { to: '/grns', label: 'Receive (GRN)', end: true },
-      { to: '/grns/register', label: 'GRN register', more: true },
-      { to: '/challans', label: 'Challans' },
+      { to: '/grns', label: 'Receive from supplier', end: true },
+      { to: '/challans', label: 'Delivery challans' },
       { to: '/stock', label: 'Stock' },
-      { to: '/store/transfers', label: 'Transfer requests', more: true },
-      { to: '/movements', label: 'Movement', more: true },
+      { to: '/grns/register', label: 'GRN register', more: true },
+      { to: '/store/transfers', label: 'Site-to-site requests', more: true },
+      { to: '/movements', label: 'Stock movement', more: true },
       { to: '/items', label: 'Item master', more: true },
       // reached from a PRN, never from the menu
-      { to: '/store/issue', label: 'Issue sheet', hidden: true },
-      { to: '/store/source', label: 'Source from a site', hidden: true },
+      { to: '/store/issue', label: 'Dispatch sheet', hidden: true },
+      { to: '/store/source', label: 'Ask another site', hidden: true },
     ],
   },
   {
     id: 'procure',
-    label: 'Procure',
-    icon: '◆',
+    label: 'Procurement',
+    icon: 'cart',
+    caption: 'Setup',
     screens: [
       { to: '/procurement', label: 'To buy' },
-      { to: '/comparisons', label: 'Rate comparison' },
-      { to: '/purchase-orders', label: 'Orders' },
+      { to: '/comparisons', label: 'Rate comparisons' },
+      { to: '/purchase-orders', label: 'Purchase orders' },
       { to: '/suppliers', label: 'Suppliers', more: true },
     ],
   },
   {
     id: 'billing',
     label: 'Billing',
-    icon: '₹',
+    icon: 'receipt',
     screens: [
       { to: '/billing', label: 'Bill a site', end: true },
-      { to: '/billing/bills', label: 'Bills' },
+      { to: '/billing/bills', label: 'RA bills' },
     ],
   },
   {
     id: 'reports',
     label: 'Reports',
-    icon: '☷',
+    icon: 'chart',
     screens: [
       { to: '/reports/expense', label: 'Expense report' },
-      { to: '/reports/pl', label: 'Profit and loss' },
+      { to: '/reports/pl', label: 'Profit & loss' },
     ],
   },
   {
     id: 'admin',
     label: 'Logins',
-    icon: '⚿',
+    icon: 'users',
+    scope: 'none',
     screens: [
       { to: '/admin/users', label: 'Users & access' },
     ],
   },
+  {
+    id: 'help',
+    label: 'Help',
+    icon: 'help',
+    scope: 'none',
+    screens: [
+      { to: '/help', label: 'How work moves', end: true },
+      { to: '/help/glossary', label: 'Glossary' },
+    ],
+  },
 ];
+
+/** The label a screen has in the menu — pages use it as their title. */
+export const titleOf = (to) => {
+  for (const s of SECTIONS) {
+    const x = s.screens.find((y) => y.to === to);
+    if (x) return x.label;
+  }
+  return '';
+};
 
 /**
  * What each login is shown.
@@ -160,7 +181,7 @@ export const SECTIONS = [
  * A department sees its own department, all of it. Management and the
  * General Manager oversee: every department, but the screens that show
  * the work rather than the ones that do it — nobody overseeing raises
- * an indent or issues material. The server holds the same line
+ * a PRN or issues material. The server holds the same line
  * (backend/src/lib/access.js); this only decides what is drawn.
  *
  * `all` is every screen of the section; a list names the ones shown.
@@ -177,16 +198,17 @@ const OVERSEE = {
   procure: 'all',
   billing: 'all',
   reports: 'all',
+  help: 'all',
 };
 const MENU = {
   Management: { ...OVERSEE, admin: 'all' },
   'General Manager': OVERSEE,
-  Planning: { plan: 'all' },
+  Planning: { plan: 'all', help: 'all' },
   // the site answers transfer requests from its Approvals
-  Site: { approvals: 'all', site: 'all' },
-  Store: { store: 'all' },
-  Procurement: { procure: 'all' },
-  Billing: { billing: 'all' },
+  Site: { approvals: 'all', site: 'all', help: 'all' },
+  Store: { store: 'all', help: 'all' },
+  Procurement: { procure: 'all', help: 'all' },
+  Billing: { billing: 'all', help: 'all' },
 };
 // open to an overseer by path, but they are forms for doing the work
 const DOING = [/^\/indents\/new/, /\/edit$/, /^\/sites\/new/, /^\/site\/(issue|returns|transfers)/,
@@ -197,13 +219,14 @@ export function menuFor(access) {
   return SECTIONS.filter((sec) => pick[sec.id]).map((sec) => {
     const want = pick[sec.id];
     let screens = want === 'all' ? sec.screens : sec.screens.filter((x) => want.includes(x.to));
-    // chosen for an overseer: nothing hides behind More, and a form for
+    // chosen for an overseer: nothing under a caption, and a form for
     // doing the work stays off the menu
     if (want !== 'all') {
       screens = screens.map((x) => ({ ...x, more: false,
         hidden: x.hidden || DOING.some((re) => re.test(x.to)) }));
     }
     // issuing is the store keeper's, so only a keeper is offered it
+    // (taking material back is any site person's, as the server allows)
     if (sec.id === 'site' && !(access.keeperOf || []).length) {
       screens = screens.filter((x) => x.to !== '/site/issue');
     }
@@ -221,7 +244,7 @@ const reachable = (sections, access, pathname) => {
 };
 
 export const SOON = [
-  { id: 'accounts', label: 'Accounts', icon: '◎' },
+  { id: 'accounts', label: 'Accounts', icon: 'wallet' },
 ];
 
 /**
@@ -236,69 +259,71 @@ export const SOON = [
 const sectionFor = (sections, pathname, from) =>
   (from && sections.find((s) => s.id === from
     && s.screens.some((x) => pathname.startsWith(x.to))))
-  || sections.find((s) => s.screens.some((x) => pathname.startsWith(x.to)))
+  || sections.find((s) => s.screens.some((x) => (x.end ? pathname === x.to || pathname.startsWith(`${x.to}/`) : pathname.startsWith(x.to))))
   || sections[0];
 
 const screenFor = (section, pathname) =>
   [...section.screens].sort((a, b) => b.to.length - a.to.length)
-    .find((x) => pathname.startsWith(x.to));
+    .find((x) => pathname === x.to || pathname.startsWith(`${x.to}/`) || (!x.end && pathname.startsWith(x.to)));
 
-/* ------------------------------------------------------------ theme
-   Light or dark, remembered, and applied to <html> so the sheet's
-   .dark block takes over. Nothing else in the app has to know. */
+/* ------------------------------------------------------------ theme */
 const useTheme = () => {
-  const [dark, setDark] = useState(() => localStorage.getItem('ajp.theme') === 'dark');
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem('ajp.theme') === 'dark'; } catch { return false; }
+  });
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('ajp.theme', dark ? 'dark' : 'light');
+    try { localStorage.setItem('ajp.theme', dark ? 'dark' : 'light'); } catch { /* private window */ }
   }, [dark]);
   return [dark, setDark];
 };
 
-/** One department in the sidebar: the heading, its options, and More. */
+/** One department in the sidebar: the heading, its daily screens, then the rest under a caption. */
 function NavGroup({ section, active, open, onToggle, counts, mini }) {
-  const [showMore, setShowMore] = useState(false);
   const listed = section.screens.filter((x) => !x.hidden);
   const daily = listed.filter((x) => !x.more);
   const rest = listed.filter((x) => x.more);
   const total = section.screens.reduce((a, x) => a + (x.badge ? counts[x.badge] || 0 : 0), 0);
-  // an option behind More that is the one you are on must still show
-  const shown = [...daily, ...(showMore ? rest : rest.filter((x) => active && x.to === active.to))];
 
-  const item = (x, onClick) => (
-    <NavLink key={x.to} to={x.to} end={x.end} state={{ dept: section.id }} onClick={onClick}
-      className={({ isActive }) => (isActive ? 'on' : '')}>
+  const item = (x) => (
+    <NavLink key={x.to} to={x.to} end={x.end} state={{ dept: section.id }}
+      className={({ isActive }) => (isActive || active?.to === x.to ? 'on' : '')}
+      aria-current={active?.to === x.to ? 'page' : undefined}>
       <span>{x.label}</span>
       <span className="sp" />
-      {x.badge && counts[x.badge] > 0 && <span className="count">{counts[x.badge]}</span>}
+      {x.badge && counts[x.badge] > 0 && (
+        <span className="count" title={`${counts[x.badge]} ${x.badgeSays || 'waiting'}`}
+          aria-label={`${counts[x.badge]} ${x.badgeSays || 'waiting'}`}>{counts[x.badge]}</span>
+      )}
     </NavLink>
   );
 
   return (
     <div className="nav-group">
       <button type="button" className={`nav-sec ${open ? 'open' : ''} ${active ? 'on' : ''}`}
-        onClick={onToggle} aria-expanded={open} title={section.label}>
-        <i aria-hidden="true">{section.icon}</i>
+        onClick={onToggle} aria-expanded={open} title={mini ? section.label : undefined}>
+        <Icon name={section.icon} size={18} />
         <span className="label">{section.label}</span>
-        {total > 0 && <span className="count">{total}</span>}
-        <span className="chev" aria-hidden="true">{'▶'}</span>
+        {total > 0 && <span className="count" aria-label={`${total} waiting`}>{total}</span>}
+        <span className="chev"><Icon name="chevronRight" size={14} /></span>
       </button>
 
       {open && !mini && (
         <div className="nav-items">
-          {shown.map((x) => item(x))}
+          {daily.map(item)}
           {rest.length > 0 && (
-            <button type="button" className="nav-more" onClick={() => setShowMore((v) => !v)}>
-              {showMore ? '− Less' : `+ ${rest.length} more`}
-            </button>
+            <>
+              <div className="nav-cap">{section.caption || 'More'}</div>
+              {rest.map(item)}
+            </>
           )}
         </div>
       )}
 
-      {/* collapsed: everything, on hover, without expanding the sidebar */}
+      {/* collapsed: everything, on hover or focus, without widening the sidebar */}
       <div className="flyout">
         <h4>{section.label}</h4>
-        {listed.map((x) => item(x))}
+        {listed.map(item)}
       </div>
     </div>
   );
@@ -316,9 +341,11 @@ function Shell({ children }) {
   const screen = screenFor(section, pathname);
   const [dark, setDark] = useTheme();
 
-  const [mini, setMini] = useState(() => localStorage.getItem('ajp.nav') === 'mini');
+  const [mini, setMini] = useState(() => {
+    try { return localStorage.getItem('ajp.nav') === 'mini'; } catch { return false; }
+  });
   const toggleMini = () => setMini((v) => {
-    localStorage.setItem('ajp.nav', v ? 'wide' : 'mini');
+    try { localStorage.setItem('ajp.nav', v ? 'wide' : 'mini'); } catch { /* private window */ }
     return !v;
   });
 
@@ -329,16 +356,23 @@ function Shell({ children }) {
 
   const site = section.id === 'site' ? allSites.find((x) => x.id === siteId) : null;
   const store = section.id === 'store' ? allStores.find((x) => x.id === storeId) : null;
-  const choosing = (section.id === 'site' && !site) || (section.id === 'store' && !store);
+  // A document opened from somewhere else (a PRN from Approvals, a GRN
+  // from the register) is shown, not replaced by the site chooser — the
+  // document already says which site it belongs to.
+  const onDocument = /\/\d+(\/|$)/.test(pathname);
+  const choosing = !onDocument && ((section.id === 'site' && !site) || (section.id === 'store' && !store));
 
   const branchId =
     section.id === 'site' ? (site?.branch.id ?? null)
       : section.id === 'store' ? (store?.branch_id ?? null)
         : (branchSel === 'ALL' ? null : branchSel);
+  const branchName = branchSel === 'ALL' ? 'All branches'
+    : branches.find((b) => b.id === branchSel)?.name || 'All branches';
 
   const inner = {
     ...outer,
     branchId,
+    branchName,
     // true only where the picker really is on every branch; the Site and
     // Store departments are never "all", they are one site or one store
     allBranches: !['site', 'store'].includes(section.id) && branchSel === 'ALL',
@@ -347,18 +381,26 @@ function Shell({ children }) {
     store,
     stores: branchId ? allStores.filter((x) => x.branch_id === branchId) : allStores,
   };
+  // A number in the menu means "this needs you", nothing else. Waiting
+  // on an approver is counted once, under Approvals, for the approver;
+  // a site's menu counts only what came back to the site to be changed,
+  // for the site in the top bar (or every site this login can see).
+  const mySites = new Set((site ? [site] : allSites).map((x) => x.id));
+  const onMySites = (rows) => (rows || []).filter((r) => mySites.has(r.site_id)).length;
   const counts = {
-    amendmentDue: desk?.amendmentDue?.length || 0,
-    indentsWaiting: desk?.indentsWaiting?.length || 0,
-    expensesWaiting: desk?.expensesWaiting || 0,
+    amendmentDue: access.role === 'Planning' ? desk?.amendmentDue?.length || 0 : 0,
+    indentsSentBack: access.role === 'Site' ? onMySites(desk?.indentsSentBack) : 0,
+    expensesSentBack: access.role === 'Site' ? onMySites(desk?.expensesSentBack) : 0,
     approvals: approvalsWaiting || 0,
   };
+  const viewOnly = access.overseer && !['approvals', 'admin', 'help'].includes(section.id);
 
   return (
     <div className={`shell ${mini ? 'mini' : ''}`}>
-      <nav className="nav" aria-label="Everything in the system">
+      <a className="skip" href="#main">Skip to the page</a>
+      <nav className="nav" aria-label="Departments and screens">
         <div className="nav-head">
-          <div className="mark">AJ</div>
+          <div className="mark" aria-hidden="true">AJ</div>
           {!mini && (
             <>
               <div className="who-we">
@@ -369,9 +411,9 @@ function Shell({ children }) {
             </>
           )}
           <button type="button" className="nav-toggle" onClick={toggleMini}
-            title={mini ? 'Widen the menu' : 'Shrink the menu'}
-            aria-label={mini ? 'Widen the menu' : 'Shrink the menu'}>
-            {mini ? '»' : '«'}
+            aria-label={mini ? 'Widen the menu' : 'Narrow the menu to icons'}
+            title={mini ? 'Widen the menu' : 'Narrow the menu to icons'}>
+            <Icon name="panel" size={17} />
           </button>
         </div>
 
@@ -386,20 +428,19 @@ function Shell({ children }) {
 
           {access.overseer && SOON.map((d) => (
             <div key={d.id} className="nav-group">
-              <div className="nav-sec soon" title={`${d.label} — not built yet`}>
-                <i aria-hidden="true">{d.icon}</i>
+              <div className="nav-sec soon" title={`${d.label} is not built yet`}>
+                <Icon name={d.icon} size={18} />
                 <span className="label">{d.label}</span>
-                <span className="chev" style={{ opacity: .4 }}>soon</span>
+                <span className="soon-note">Not built yet</span>
               </div>
             </div>
           ))}
         </div>
 
         <div className="nav-foot">
-          <button type="button" className="nav-sec" onClick={() => setDark((v) => !v)}
-            title={dark ? 'Light theme' : 'Dark theme'}>
-            <i aria-hidden="true">{dark ? '◑' : '◐'}</i>
-            <span className="label">{dark ? 'Light theme' : 'Dark theme'}</span>
+          <button type="button" className="nav-sec" onClick={() => setDark((v) => !v)}>
+            <Icon name={dark ? 'sun' : 'moon'} size={18} />
+            <span className="label">{dark ? 'Use light theme' : 'Use dark theme'}</span>
           </button>
         </div>
       </nav>
@@ -408,91 +449,124 @@ function Shell({ children }) {
         <header className="top">
           <div className="crumb">
             <b>{section.label}</b>
-            {screen && <span>{'›'} {screen.label}</span>}
-            {access.overseer && !['approvals', 'admin'].includes(section.id) && (
-              <span className="tag brand" title="You oversee this department; its own team does the work">View only</span>
+            {screen && !screen.hidden && <><Icon name="chevronRight" size={13} /><span>{screen.label}</span></>}
+            {viewOnly && (
+              <Status tone="neutral" icon="eye" label="View only"
+                hint={`You oversee ${section.label}; its own team does the work here`} />
             )}
           </div>
           <span className="sp" />
-          {section.id === 'site' && site && (
-            <>
-              <label className="who" htmlFor="site">Site</label>
-              <select id="site" value={site.id}
-                onChange={(e) => setSite(Number(e.target.value))}>
-                {branches.map((b) => {
-                  const here = allSites.filter((x) => x.branch.id === b.id);
-                  return here.length ? (
-                    <optgroup key={b.id} label={b.name}>
-                      {here.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                    </optgroup>
-                  ) : null;
-                })}
-              </select>
-              <button type="button" className="top-btn" onClick={() => setSite(null)}
-                title="See every site as cards">All sites</button>
-            </>
-          )}
-          {section.id === 'store' && store && (
-            <>
-              <label className="who" htmlFor="store">Store</label>
-              <select id="store" value={store.id}
-                onChange={(e) => setStore(Number(e.target.value))}>
-                {branches.map((b) => {
-                  const here = allStores.filter((x) => x.branch_id === b.id);
-                  return here.length ? (
-                    <optgroup key={b.id} label={b.name}>
-                      {here.map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.name}{x.is_central ? ' · central' : ''}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null;
-                })}
-              </select>
-              <button type="button" className="top-btn" onClick={() => setStore(null)}
-                title="See every store as cards">All stores</button>
-            </>
-          )}
-          {!['site', 'store'].includes(section.id) && (
-            <>
-              <label className="who" htmlFor="branch">Branch</label>
-              <select id="branch" value={branchSel ?? ''}
-                onChange={(e) => setBranch(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}>
-                <option value="ALL">All branches</option>
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </>
-          )}
+          <Scope section={section} site={site} store={store} branches={branches}
+            allSites={allSites} allStores={allStores} setSite={setSite} setStore={setStore}
+            branchSel={branchSel} setBranch={setBranch} />
           <div className="me" title={user.email}>
             <b>{user.name}</b>
             <span>{user.department}</span>
           </div>
-          <button type="button" className="top-btn" onClick={() => setPwOpen(true)}>Password</button>
-          <button type="button" className="top-btn" onClick={signOut}>Sign out</button>
+          <button type="button" className="top-btn" onClick={() => setPwOpen(true)}>
+            <Icon name="key" size={14} />Password
+          </button>
+          <button type="button" className="top-btn" onClick={signOut}>
+            <Icon name="logout" size={14} />Sign out
+          </button>
         </header>
         {pwOpen && <PasswordForm onClose={() => setPwOpen(false)} />}
 
-        <div className="page">
+        <main className="page" id="main" tabIndex={-1}>
           <AppCtx.Provider value={inner}>
             {!reachable(sections, access, pathname)
               ? <NotYours home={sections[0]?.screens[0]?.to || '/'} />
               : choosing
-              ? <Chooser kind={section.id} sites={allSites} stores={allStores} branches={branches}
-                  onPick={(id) => (section.id === 'site' ? setSite(id) : setStore(id))} />
-              : children}
+                ? <Chooser kind={section.id} sites={allSites} stores={allStores} branches={branches}
+                    onPick={(id) => (section.id === 'site' ? setSite(id) : setStore(id))} />
+                : children}
           </AppCtx.Provider>
-        </div>
+        </main>
       </div>
     </div>
   );
 }
 
+/**
+ * What the page is showing, said in the top bar.
+ *
+ * Three kinds of page, and the bar never pretends one is another:
+ * a site's or store's own pages (one place, switchable), pages that
+ * follow the branch picker, and pages the picker does not touch —
+ * Approvals is routed to the person, so it says so rather than showing
+ * a branch picker that changes nothing.
+ */
+function Scope({ section, site, store, branches, allSites, allStores, setSite, setStore, branchSel, setBranch }) {
+  if (section.scope === 'none') return null;
+  if (section.scope === 'person') {
+    return (
+      <div className="scope" title="Approvals are routed to you by name, from every branch">
+        <span className="scope-l">Showing</span>
+        <span className="scope-fixed">Everything routed to you · all branches</span>
+      </div>
+    );
+  }
+  if (section.id === 'site') {
+    if (!site) return null;
+    return (
+      <div className="scope">
+        <label className="scope-l" htmlFor="scope-site">Site</label>
+        <select id="scope-site" value={site.id} onChange={(e) => setSite(Number(e.target.value))}>
+          {branches.map((b) => {
+            const here = allSites.filter((x) => x.branch.id === b.id);
+            return here.length ? (
+              <optgroup key={b.id} label={b.name}>
+                {here.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </optgroup>
+            ) : null;
+          })}
+        </select>
+        <button type="button" className="btn sm ghost" onClick={() => setSite(null)}>All sites</button>
+      </div>
+    );
+  }
+  if (section.id === 'store') {
+    if (!store) return null;
+    return (
+      <div className="scope">
+        <label className="scope-l" htmlFor="scope-store">Store</label>
+        <select id="scope-store" value={store.id} onChange={(e) => setStore(Number(e.target.value))}>
+          {branches.map((b) => {
+            const here = allStores.filter((x) => x.branch_id === b.id);
+            return here.length ? (
+              <optgroup key={b.id} label={b.name}>
+                {here.map((x) => (
+                  <option key={x.id} value={x.id}>{x.name}{x.is_central ? ' (central)' : ''}</option>
+                ))}
+              </optgroup>
+            ) : null;
+          })}
+        </select>
+        <button type="button" className="btn sm ghost" onClick={() => setStore(null)}>All stores</button>
+      </div>
+    );
+  }
+  return (
+    <div className="scope">
+      <label className="scope-l" htmlFor="scope-branch">Branch</label>
+      <select id="scope-branch" value={branchSel ?? 'ALL'}
+        onChange={(e) => setBranch(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}>
+        <option value="ALL">All branches</option>
+        {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * A page's title row. `title` defaults to the screen's menu label, so a
+ * screen is called the same thing in the menu and on the page.
+ */
 export const PageHead = ({ title, sub, actions }) => (
   <div className="page-head">
     <div><h1>{title}</h1>{sub && <p>{sub}</p>}</div>
     <div className="sp" />
-    {actions}
+    {actions && <div className="acts">{actions}</div>}
   </div>
 );
 
@@ -500,45 +574,54 @@ export const PageHead = ({ title, sub, actions }) => (
 function NotYours({ home }) {
   return (
     <div className="page-body">
-      <div className="empty">
-        <b>Not part of your login</b>
-        This screen belongs to another department.{' '}
-        <NavLinkHome to={home} />
+      <div className="empty" style={{ marginTop: 40 }}>
+        <Icon name="lock" size={22} />
+        <b>This screen is not part of your login</b>
+        <p>It belongs to another department. Management can change what your login can open.</p>
+        <div className="acts"><NavLink className="btn" to={home}>Go to your first screen</NavLink></div>
       </div>
     </div>
   );
 }
-const NavLinkHome = ({ to }) => <NavLink to={to}>Go to your first screen</NavLink>;
 
 /** Change your own password. */
 function PasswordForm({ onClose }) {
   const toast = useToast();
   const [f, setF] = useState({ current: '', next: '', again: '' });
   const [busy, setBusy] = useState(false);
+  const short = f.next.length > 0 && f.next.length < 8;
+  const differ = f.again.length > 0 && f.next !== f.again;
   const save = async () => {
-    if (f.next.length < 8) return toast('At least 8 characters', 'bad');
-    if (f.next !== f.again) return toast('The two new passwords are not the same', 'bad');
+    if (f.next.length < 8) return toast('The new password needs at least 8 characters', 'bad');
+    if (f.next !== f.again) return toast('The two new passwords do not match', 'bad');
     setBusy(true);
     try {
       await api.post('/auth/password', { current: f.current, next: f.next });
-      toast('Password changed — other sessions are signed out', 'ok');
+      toast('Password changed. Your other sessions are signed out.', 'ok');
       onClose();
     } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+    return undefined;
   };
-  const inp = (k, label) => (
-    <Field label={label}>
-      <input className="inp" type="password" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
-    </Field>
+  const inp = (k, label, auto) => (
+    <input className="inp" type="password" autoComplete={auto} value={f[k]} aria-label={label}
+      onChange={(e) => setF({ ...f, [k]: e.target.value })} />
   );
   return (
     <Modal title="Change your password" onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn pri" onClick={save} disabled={busy || !f.current || !f.next}>Change it</button>
+        <button className="btn pri" onClick={save}
+          disabled={busy || !f.current || !f.next || short || differ}>
+          {busy ? 'Changing…' : 'Change password'}
+        </button>
       </>}>
-      {inp('current', 'Current password')}
-      {inp('next', 'New password')}
-      {inp('again', 'New password again')}
+      <Field label="Current password">{inp('current', 'Current password', 'current-password')}</Field>
+      <Field label="New password" hint={short ? 'At least 8 characters' : 'At least 8 characters'} bad={short}>
+        {inp('next', 'New password', 'new-password')}
+      </Field>
+      <Field label="New password again" hint={differ ? 'Does not match the new password' : undefined} bad={differ}>
+        {inp('again', 'New password again', 'new-password')}
+      </Field>
     </Modal>
   );
 }
@@ -570,7 +653,7 @@ export default function App() {
     });
   }, []);
 
-  if (auth.checking) return <Loading />;
+  if (auth.checking) return <Loading what="your login" />;
   if (auth.out) {
     return (
       <ToastHost>
@@ -582,21 +665,26 @@ export default function App() {
   return <Workspace key={auth.user.id} user={auth.user} access={auth.access} signOut={signOut} />;
 }
 
+const remembered = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+
 function Workspace({ user, access, signOut }) {
   const sections = menuFor(access);
   const home = sections[0]?.screens[0]?.to || '/approvals';
   const [boot, setBoot] = useState({ loading: true });
-  // the branch picker: a branch id, or 'ALL'. Remembered.
+  // The branch picker: a branch id, or 'ALL'. Remembered. It starts on
+  // All branches — trial 1 started on whichever branch sorted first
+  // (Bengaluru), and every Hyderabad document was invisible until
+  // somebody noticed the picker.
   const [branchSel, setBranchSel] = useState(() => {
-    const v = localStorage.getItem('ajp.branchId');
-    return v === 'ALL' ? 'ALL' : (Number(v) || null);
+    const v = remembered('ajp.branchId');
+    return v === 'ALL' || !v ? 'ALL' : (Number(v) || 'ALL');
   });
-  const [storeId, setStoreId] = useState(Number(localStorage.getItem('ajp.storeId')) || null);
-  const [siteId, setSiteId] = useState(Number(localStorage.getItem('ajp.siteId')) || null);
+  const [storeId, setStoreId] = useState(Number(remembered('ajp.storeId')) || null);
+  const [siteId, setSiteId] = useState(Number(remembered('ajp.siteId')) || null);
   const [allStores, setAllStores] = useState([]);
   const [allSites, setAllSites] = useState([]);
   const [desk, setDesk] = useState(null);
-  // what is waiting on the Working-as person: the badge on Approvals
+  // what is waiting on the signed-in person: the badge on Approvals
   const [approvalsWaiting, setApprovalsWaiting] = useState(0);
   const refreshApprovals = useCallback(() => {
     api.get('/approvals/count').then((r) => setApprovalsWaiting(r.waiting))
@@ -608,7 +696,8 @@ function Workspace({ user, access, signOut }) {
     Promise.all([api.get('/masters/branches'), api.get('/users')])
       .then(([branches, users]) => {
         setBoot({ loading: false, branches, users, me: user });
-        setBranchSel((b) => b || branches[0]?.id || null);
+        // a remembered branch that no longer exists falls back to all
+        setBranchSel((b) => (b === 'ALL' || branches.some((x) => x.id === b) ? b : 'ALL'));
       })
       .catch((error) => setBoot({ loading: false, error }));
   }, []);
@@ -632,7 +721,7 @@ function Workspace({ user, access, signOut }) {
   }, []);
   useEffect(loadPlaces, [loadPlaces]);
 
-  // counts for the tab badges: an amendment that is due should be
+  // counts for the menu badges: an amendment that is due should be
   // visible from wherever you happen to be standing. On every branch
   // they are counted across every branch.
   const refreshDesk = useCallback(() => {
@@ -642,19 +731,19 @@ function Workspace({ user, access, signOut }) {
   }, [branchSel]);
   useEffect(refreshDesk, [refreshDesk]);
 
-  if (boot.loading) return <Loading />;
+  if (boot.loading) return <Loading what="the workspace" />;
   if (boot.error) {
     return (
-      <div style={{ maxWidth: 560, margin: '80px auto' }}>
+      <div style={{ maxWidth: 560, margin: '80px auto', padding: '0 16px' }}>
         <ErrorNote
-          error={{ message: `Can't reach the API. Is it running on :4000? (${boot.error.message})` }}
+          error={{ message: `Cannot reach the AJ Power server. Check that the API is running, then try again. (${boot.error.message})` }}
           onRetry={() => window.location.reload()} />
       </div>
     );
   }
 
   const remember = (key, v) => {
-    if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, String(v));
+    try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, String(v)); } catch { /* private window */ }
   };
   const setBranch = (v) => { setBranchSel(v); remember('ajp.branchId', v); };
   const setStore = (id) => { setStoreId(id); remember('ajp.storeId', id); };
@@ -672,77 +761,88 @@ function Workspace({ user, access, signOut }) {
       user, access, sections, signOut,
     }}>
       <ToastHost>
-        <BrowserRouter>
-          <Shell>
-            <Routes>
-              <Route path="/" element={<Navigate to={home} replace />} />
-              {/* The department overview desks are parked, not deleted:
-                  pages/Desk.jsx and the /desk API are still here, and
-                  bringing them back is this route and one nav row each.
-                  Approvals is the landing screen while they are away. */}
-              {['plan', 'site', 'store', 'procure', 'billing', 'reports'].map((d) => (
-                <Route key={d} path={`/desk/${d}`}
-                  element={<Navigate to={home} replace />} />
-              ))}
-              <Route path="/approvals" element={<Approvals />} />
-              <Route path="/approvals/decided" element={<Decided />} />
-              <Route path="/sites" element={<Sites />} />
-              <Route path="/sites/new" element={<NewSite />} />
-              <Route path="/sites/:id" element={<SiteDetail />} />
-              <Route path="/stores" element={<Stores />} />
-              <Route path="/boq" element={<BoqList />} />
-              <Route path="/items" element={<Items />} />
-              <Route path="/clients" element={<Clients />} />
-              <Route path="/store" element={<Navigate to="/store/prns" replace />} />
-              <Route path="/store/prns" element={<Prns />} />
-              <Route path="/store/source" element={<SourceFromSitePage />} />
-              <Route path="/store/transfers" element={<StoreTransfers />} />
-              <Route path="/store/issue" element={<IssueSheet />} />
-              <Route path="/grns" element={<Grns />} />
-              <Route path="/grns/register" element={<GrnRegister />} />
-              <Route path="/grns/:id" element={<GrnDetail />} />
-              <Route path="/stock" element={<Stock />} />
-              <Route path="/movements" element={<Movements />} />
-              <Route path="/challans" element={<Challans />} />
-              <Route path="/challans/new" element={<Navigate to="/store/prns" replace />} />
-              <Route path="/challans/:id" element={<ChallanDetail />} />
-              <Route path="/site/inbox" element={<SiteInbox />} />
-              <Route path="/site/stock" element={<SiteStock />} />
-              <Route path="/site/transfers" element={<SiteTransfers />} />
-              <Route path="/site/sent" element={<SentAndReorder />} />
-              <Route path="/site/issue" element={<IssueStock />} />
-              <Route path="/site/returns" element={<ReturnStock />} />
-              <Route path="/site/transactions" element={<Transactions />} />
-              <Route path="/site/audit" element={<Audit />} />
-              <Route path="/site/consumption" element={<Consumed />} />
-              <Route path="/site/expenses" element={<Expenses />} />
-              <Route path="/billing" element={<Billing />} />
-              <Route path="/billing/bills" element={<Bills />} />
-              <Route path="/billing/site/:siteId" element={<BillingSheet />} />
-              <Route path="/reports/expense" element={<ExpenseReport />} />
-              <Route path="/reports/pl" element={<ProfitLoss />} />
-              {/* these lived under Reports for a day; keep the links working */}
-              <Route path="/reports" element={<Navigate to="/reports/expense" replace />} />
-              <Route path="/reports/consumption"
-                element={<Navigate to="/site/consumption" replace />} />
-              <Route path="/reports/transactions"
-                element={<Navigate to="/site/transactions" replace />} />
-              <Route path="/reports/audit" element={<Navigate to="/site/audit" replace />} />
-              <Route path="/procurement" element={<Procurement />} />
-              <Route path="/comparisons" element={<Comparisons />} />
-              <Route path="/comparisons/:id" element={<ComparisonDetail />} />
-              <Route path="/purchase-orders" element={<PurchaseOrders />} />
-              <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
-              <Route path="/suppliers" element={<Suppliers />} />
-              <Route path="/indents" element={<Indents />} />
-              <Route path="/indents/new" element={<IndentCart />} />
-              <Route path="/indents/:id" element={<IndentDetail />} />
-              <Route path="/indents/:id/edit" element={<IndentCart />} />
-              <Route path="/admin/users" element={<Users />} />
-              <Route path="*" element={<div className="page-body"><p>No such page.</p></div>} />
-            </Routes>
-          </Shell>
-        </BrowserRouter>
+        <DialogHost>
+          <BrowserRouter>
+            <Shell>
+              <Routes>
+                <Route path="/" element={<Navigate to={home} replace />} />
+                {/* The department overview desks are parked, not deleted:
+                    pages/Desk.jsx and the /desk API are still here, and
+                    bringing them back is this route and one nav row each.
+                    Approvals is the landing screen while they are away. */}
+                {['plan', 'site', 'store', 'procure', 'billing', 'reports'].map((d) => (
+                  <Route key={d} path={`/desk/${d}`}
+                    element={<Navigate to={home} replace />} />
+                ))}
+                <Route path="/approvals" element={<Approvals />} />
+                <Route path="/approvals/decided" element={<Decided />} />
+                <Route path="/sites" element={<Sites />} />
+                <Route path="/sites/new" element={<NewSite />} />
+                <Route path="/sites/:id" element={<SiteDetail />} />
+                <Route path="/stores" element={<Stores />} />
+                <Route path="/boq" element={<BoqList />} />
+                <Route path="/items" element={<Items />} />
+                <Route path="/clients" element={<Clients />} />
+                <Route path="/store" element={<Navigate to="/store/prns" replace />} />
+                <Route path="/store/prns" element={<Prns />} />
+                <Route path="/store/source" element={<SourceFromSitePage />} />
+                <Route path="/store/transfers" element={<StoreTransfers />} />
+                <Route path="/store/issue" element={<IssueSheet />} />
+                <Route path="/grns" element={<Grns />} />
+                <Route path="/grns/register" element={<GrnRegister />} />
+                <Route path="/grns/:id" element={<GrnDetail />} />
+                <Route path="/stock" element={<Stock />} />
+                <Route path="/movements" element={<Movements />} />
+                <Route path="/challans" element={<Challans />} />
+                <Route path="/challans/new" element={<Navigate to="/store/prns" replace />} />
+                <Route path="/challans/:id" element={<ChallanDetail />} />
+                <Route path="/site/inbox" element={<SiteInbox />} />
+                <Route path="/site/stock" element={<SiteStock />} />
+                <Route path="/site/transfers" element={<SiteTransfers />} />
+                <Route path="/site/sent" element={<SentAndReorder />} />
+                <Route path="/site/issue" element={<IssueStock />} />
+                <Route path="/site/returns" element={<ReturnStock />} />
+                <Route path="/site/transactions" element={<Transactions />} />
+                <Route path="/site/audit" element={<Audit />} />
+                <Route path="/site/consumption" element={<Consumed />} />
+                <Route path="/site/expenses" element={<Expenses />} />
+                <Route path="/billing" element={<Billing />} />
+                <Route path="/billing/bills" element={<Bills />} />
+                <Route path="/billing/site/:siteId" element={<BillingSheet />} />
+                <Route path="/reports/expense" element={<ExpenseReport />} />
+                <Route path="/reports/pl" element={<ProfitLoss />} />
+                {/* these lived under Reports for a day; keep the links working */}
+                <Route path="/reports" element={<Navigate to="/reports/expense" replace />} />
+                <Route path="/reports/consumption"
+                  element={<Navigate to="/site/consumption" replace />} />
+                <Route path="/reports/transactions"
+                  element={<Navigate to="/site/transactions" replace />} />
+                <Route path="/reports/audit" element={<Navigate to="/site/audit" replace />} />
+                <Route path="/procurement" element={<Procurement />} />
+                <Route path="/comparisons" element={<Comparisons />} />
+                <Route path="/comparisons/:id" element={<ComparisonDetail />} />
+                <Route path="/purchase-orders" element={<PurchaseOrders />} />
+                <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+                <Route path="/suppliers" element={<Suppliers />} />
+                <Route path="/indents" element={<Indents />} />
+                <Route path="/indents/new" element={<IndentCart />} />
+                <Route path="/indents/:id" element={<IndentDetail />} />
+                <Route path="/indents/:id/edit" element={<IndentCart />} />
+                <Route path="/admin/users" element={<Users />} />
+                <Route path="/help" element={<HowWorkMoves />} />
+                <Route path="/help/glossary" element={<Glossary />} />
+                <Route path="*" element={(
+                  <div className="page-body">
+                    <div className="empty" style={{ marginTop: 40 }}>
+                      <b>There is no page at this address</b>
+                      <p>The link may be old. Use the menu on the left to find the screen.</p>
+                    </div>
+                  </div>
+                )} />
+              </Routes>
+            </Shell>
+          </BrowserRouter>
+        </DialogHost>
       </ToastHost>
     </AppCtx.Provider>
   );

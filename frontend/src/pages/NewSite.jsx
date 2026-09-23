@@ -1,8 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, money, qty, today, ApiError, withBranch } from '../api';
-import { useApi, Card, Field, Banner, Empty, useToast, ClientPicker } from '../components/ui';
+import { api, money, qty, today, ApiError, withBranch, plural } from '../api';
+import {
+  useApi, Card, Field, Banner, Empty, useToast, ClientPicker,
+} from '../components/ui';
+import { Icon } from '../components/icons';
 
 /**
  * Creating a site is two steps because that is how it happens: agree
@@ -87,7 +90,7 @@ export default function NewSite() {
       qty: l.qty || '', supplyRate: l.supplyRate || '', instRate: l.instRate || '',
     }));
     setLines(replace ? rows : lines.filter((l) => l.description.trim()).concat(rows));
-    toast(`${rows.length} line(s) ${replace ? 'imported' : 'added'}`, 'ok');
+    toast(`${plural(rows.length, 'line')} ${replace ? 'imported' : 'added'}`, 'ok');
     setImported(null);
   };
 
@@ -165,7 +168,7 @@ export default function NewSite() {
                       {users.map((u) => <option key={u.id} value={u.id}>{u.name} — {u.department}</option>)}
                     </select>
                   </Field>
-                  <Field label="Site storekeeper" hint="Receives material and acknowledges challans.">
+                  <Field label="Site store keeper" hint="Receives deliveries at the site and issues material to workers.">
                     <select className="inp" value={p.keeperUserId} onChange={set('keeperUserId')}>
                       <option value="">— choose —</option>
                       {users.map((u) => <option key={u.id} value={u.id}>{u.name} — {u.department}</option>)}
@@ -196,7 +199,7 @@ export default function NewSite() {
                         <span className="chip" key={id}>
                           {u?.name}<small>{u?.department}</small>
                           <button type="button" title="Remove"
-                            onClick={() => setP((x) => ({ ...x, team: x.team.filter((t) => t !== id) }))}>✕</button>
+                            onClick={() => setP((x) => ({ ...x, team: x.team.filter((t) => t !== id) }))}><Icon name="x" size={14} /></button>
                         </span>
                       );
                     }) : <small style={{ color: 'var(--faint)' }}>Nobody added yet</small>}
@@ -227,7 +230,7 @@ export default function NewSite() {
               <div className="pad">
                 <Banner kind="info" icon="▤">
                   The work order is the contract. Once it is loaded, every quantity downstream — BOQ,
-                  indent, purchase order, client bill — is measured against it, and it can only change
+                  PRN, purchase order, client bill — is measured against it, and it can only change
                   through an amendment.
                 </Banner>
                 <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6 }}>
@@ -303,7 +306,7 @@ export default function NewSite() {
                     <td className="rt mono"><b>{money(lineTotal(l))}</b></td>
                     <td>
                       <button className="btn sm bad" title="Remove line"
-                        onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((_, n) => n !== i) : [blankLine(defaultUom)]))}>✕</button>
+                        onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((_, n) => n !== i) : [blankLine(defaultUom)]))}><Icon name="x" size={14} /></button>
                     </td>
                   </tr>
                 ))}
@@ -339,10 +342,11 @@ export default function NewSite() {
               {imported && (
                 <div style={{ marginTop: 12 }}>
                   <Banner kind="ok" icon="✓">
-                    <b>{imported.lines.length} line(s)</b> read from {imported.sheet} — {money(imported.value)}.
+                    <b>{plural(imported.lines.length, 'line')}</b> read from {imported.sheet} — {money(imported.value)}.
                     {imported.incomplete > 0 && (
-                      <><br /><small>{imported.incomplete} line(s) came in without a quantity or rate. They will
-                      import, and you can fill them in before submitting.</small></>
+                      <><br /><small>{imported.incomplete === 1
+                        ? '1 line came in without a quantity or rate. It will import, and you can fill it in before submitting.'
+                        : `${imported.incomplete} lines came in without a quantity or rate. They will import, and you can fill them in before submitting.`}</small></>
                     )}
                     <div style={{ marginTop: 9, display: 'flex', gap: 8 }}>
                       <button className="btn sm pri" onClick={() => applyImport(true)}>Replace the lines</button>
@@ -393,7 +397,7 @@ export default function NewSite() {
             <div>
               <b>Work order value</b>
               <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-                {lines.filter((l) => l.description.trim()).length} line(s) · supply {money(totals.supply)} · installation {money(totals.inst)}
+                {plural(lines.filter((l) => l.description.trim()).length, 'line')} · supply {money(totals.supply)} · installation {money(totals.inst)}
               </div>
             </div>
             <div style={{ flex: 1 }} />

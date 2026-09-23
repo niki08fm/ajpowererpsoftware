@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { notFound, badRequest, conflict } = require('../lib/errors');
 const chain = require('../lib/approvals');
+const { plural } = require('../lib/words');
 
 /**
  * Indents. A cart, then a document.
@@ -185,7 +186,7 @@ router.post('/', validate(indentBody.extend({ send: z.boolean().default(false) }
 
     const out = await tx(async (conn) => {
       const priced = await evaluate(conn, boq, b.lines);
-      const docNo = await nextDocNo(conn, 'IND', b.indentDate);
+      const docNo = await nextDocNo(conn, 'PRN', b.indentDate);
       const r = await run(
         `INSERT INTO indents (doc_no, site_id, branch_id, boq_id, indent_date, needed_by, status, raised_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -211,7 +212,7 @@ router.post('/', validate(indentBody.extend({ send: z.boolean().default(false) }
       await log(conn, {
         entity: 'INDENT', entityId: r.insertId, docNo,
         action: b.send ? 'Submitted' : 'Saved as a draft',
-        detail: `${site.name} · ${priced.length} line(s)${over.length ? ` · ${over.length} past the estimate` : ''}`,
+        detail: `${site.name} · ${plural(priced.length, 'line')}${over.length ? ` · ${over.length} past the estimate` : ''}`,
         user: req.user,
       });
       return { id: r.insertId, docNo, status: b.send ? 'SUBMITTED' : 'DRAFT',
@@ -226,9 +227,9 @@ router.post('/', validate(indentBody.extend({ send: z.boolean().default(false) }
 const indentPatch = indentBody.partial();
 router.put('/:id', validate(indentPatch), wrap(async (req, res) => {
   const ind = await one(`SELECT * FROM indents WHERE id = ?`, [req.params.id]);
-  if (!ind) throw notFound('No such indent');
+  if (!ind) throw notFound('No such PRN');
   if (!EDITABLE.includes(ind.status)) {
-    throw conflict('This indent is in the queue — it has to be returned before it can be changed');
+    throw conflict('This PRN is with its approvers — it can be changed only after it is sent back');
   }
   const boq = await one(`SELECT * FROM boqs WHERE id = ?`, [ind.boq_id]);
   await tx(async (conn) => {
@@ -255,10 +256,10 @@ router.put('/:id', validate(indentPatch), wrap(async (req, res) => {
 /** Cart -> queue. This is the moment it starts holding quantity. */
 router.post('/:id/submit', wrap(async (req, res) => {
   const ind = await one(`SELECT * FROM indents WHERE id = ?`, [req.params.id]);
-  if (!ind) throw notFound('No such indent');
-  if (!EDITABLE.includes(ind.status)) throw conflict('Already submitted');
+  if (!ind) throw notFound('No such PRN');
+  if (!EDITABLE.includes(ind.status)) throw conflict('This PRN has already been sent for approval');
   const { n } = await one(`SELECT COUNT(*) AS n FROM indent_lines WHERE indent_id = ?`, [ind.id]);
-  if (!n) throw badRequest('There is nothing on this indent');
+  if (!n) throw badRequest('There is nothing on this PRN');
   await tx(async (conn) => {
     await run(`UPDATE indents SET status = 'SUBMITTED' WHERE id = ?`, [ind.id], conn);
     await run(`INSERT INTO indent_events (indent_id, action, user_id) VALUES (?, 'SUBMITTED', ?)`,
@@ -288,8 +289,8 @@ router.post('/:id/decide',
   validate(z.object({ action: z.enum(['APPROVED', 'RETURNED']), note: z.string().trim().max(500).optional() })),
   wrap(async (req, res) => {
     const ind = await one(`SELECT * FROM indents WHERE id = ?`, [req.params.id]);
-    if (!ind) throw notFound('No such indent');
-    if (ind.status !== 'SUBMITTED') throw conflict(`This indent is ${ind.status.toLowerCase()}, not waiting`);
+    if (!ind) throw notFound('No such PRN');
+    if (ind.status !== 'SUBMITTED') throw conflict(`This PRN is ${ind.status.toLowerCase()}, not waiting for approval`);
     let step;
     await tx(async (conn) => {
       step = await chain.decide(conn, { docType: 'PRN', docId: ind.id,
@@ -310,17 +311,17 @@ router.post('/:id/decide',
         : step.done ? 'APPROVED' : 'SUBMITTED',
       level: step.level, levels: step.levels, done: step.done,
       message: req.body.action === 'RETURNED'
-        ? `${ind.doc_no} is back with the site`
+        ? `${ind.doc_no} is sent back to the site`
         : step.done
-          ? `${ind.doc_no} is approved and on the buy list`
-          : `${ind.doc_no} is signed by the GM and now waits for Management`,
+          ? `${ind.doc_no} is approved and goes to the store and Procurement`
+          : `${ind.doc_no} is approved at level 1 (GM) and is now with Management`,
     });
   })
 );
 
 router.delete('/:id', wrap(async (req, res) => {
   const ind = await one(`SELECT * FROM indents WHERE id = ?`, [req.params.id]);
-  if (!ind) throw notFound('No such indent');
+  if (!ind) throw notFound('No such PRN');
   if (ind.status !== 'DRAFT') throw conflict('Only a draft can be deleted');
   await run(`DELETE FROM indents WHERE id = ?`, [ind.id]);
   res.json({ ok: true });
@@ -338,16 +339,32 @@ router.get('/',
     if (req.query.branchId) { where.push('i.branch_id = ?'); params.push(req.query.branchId); }
     if (req.query.siteId) { where.push('i.site_id = ?'); params.push(req.query.siteId); }
     if (req.query.boqId) { where.push('i.boq_id = ?'); params.push(req.query.boqId); }
+    // Two questions a PRN list has to answer, kept apart: where is the
+    // paperwork (whose desk, which level), and where is the material.
+    // "Approved" alone answers the first and hides the second.
     const rows = await many(
       `SELECT i.id, i.doc_no, i.indent_date, i.needed_by, i.status, i.created_at,
               s.id AS site_id, s.name AS site_name, u.name AS raised_by_name,
               b.doc_no AS boq_doc_no, b.over_allow, b.over_pct,
               (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id) AS line_count,
-              (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0) AS over_lines
+              (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0) AS over_lines,
+              ac.level AS approval_level, ac.status AS approval_status,
+              DATEDIFF(CURDATE(), DATE(ac.waiting_since)) AS days_waiting,
+              g.name AS gm_name,
+              (SELECT e.note FROM indent_events e
+                WHERE e.indent_id = i.id AND e.action = 'RETURNED'
+                ORDER BY e.id DESC LIMIT 1) AS sent_back_note,
+              (SELECT su.name FROM indent_events e JOIN users su ON su.id = e.user_id
+                WHERE e.indent_id = i.id AND e.action = 'RETURNED'
+                ORDER BY e.id DESC LIMIT 1) AS sent_back_by,
+              p.stage, p.indented_qty, p.in_transit_qty, p.at_site_qty, p.to_deliver_qty
          FROM indents i
          JOIN sites s ON s.id = i.site_id
          LEFT JOIN users u ON u.id = i.raised_by
+         LEFT JOIN users g ON g.id = s.gm_user_id
          JOIN boqs b ON b.id = i.boq_id
+         LEFT JOIN approval_chains ac ON ac.doc_type = 'PRN' AND ac.doc_id = i.id
+         LEFT JOIN v_indent_pipeline p ON p.indent_id = i.id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY i.created_at DESC`,
       params
@@ -355,6 +372,10 @@ router.get('/',
     const decorate = (r) => ({
       ...r,
       severity: severityOf({ over_allow: r.over_allow, over_pct: r.over_pct }, r.over_lines),
+      // whose desk it is on while it waits: the site's GM signs level 1
+      // when the site has one; otherwise, and at level 2, Management
+      waiting_on: r.status !== 'SUBMITTED' ? null
+        : Number(r.approval_level) === 1 && r.gm_name ? 'GM' : 'MANAGEMENT',
     });
     res.json({
       drafts: rows.filter((r) => r.status === 'DRAFT').map(decorate),
@@ -373,7 +394,7 @@ router.get('/:id', wrap(async (req, res) => {
        JOIN boqs b ON b.id = i.boq_id
       WHERE i.id = ?`, [req.params.id]
   );
-  if (!ind) throw notFound('No such indent');
+  if (!ind) throw notFound('No such PRN');
   const lines = await many(
     `SELECT il.id, il.qty, il.over_qty, il.remark, il.boq_line_id,
             bl.sno, i2.code AS item_code, i2.name AS item_name, u.code AS uom,
@@ -434,6 +455,8 @@ router.get('/:id', wrap(async (req, res) => {
     worstOverPct: over.reduce(
       (a, l) => Math.max(a, l.effective_est > 0 ? (l.over_qty / l.effective_est) * 100 : 0), 0),
     canEdit: EDITABLE.includes(ind.status),
+    // whose desk it is on and at which level, with names
+    approval: await chain.trail('PRN', ind.id, req.user?.id),
     lines, events,
   });
 }));

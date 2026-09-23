@@ -1,37 +1,29 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, canWrite } from '../api';
+import { api, qty, money, dmy, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
+  useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Meter, useToast, Code,
+  Status, DocHead, NextStep,
 } from '../components/ui';
+import { Icon } from '../components/icons';
+import { poStage, eventWord, eventTone, withWhom } from '../vocab';
+import { ReceiveGrn } from './Grns';
 
 /**
- * Purchase orders: the signature, then the delivery.
+ * Purchase orders: two approvals, then the delivery.
  *
- * One column says where an order is, whether that is a signature or a
- * delivery — which is what makes a single filter useful. A part
- * delivered order stays in the pipeline until it is fully received;
- * there is no closing one short.
+ * One column says where an order is, whether that is its approvals or
+ * its delivery — which is what makes a single filter useful. A partly
+ * delivered order stays open until it is fully received; there is no
+ * closing one short.
  */
-const STAGE = {
-  DRAFT: { label: 'Draft', kind: '' },
-  AWAITING_GM: { label: 'With the GM', kind: 'warn' },
-  RETURNED: { label: 'Sent back', kind: 'bad' },
-  AWAITING: { label: 'Awaiting delivery', kind: 'warn' },
-  PARTIAL: { label: 'Part received', kind: 'warn' },
-  RECEIVED: { label: 'Received in full', kind: 'ok' },
-  CANCELLED: { label: 'Cancelled', kind: '' },
-};
-export const PoTag = ({ stage }) => {
-  const s = STAGE[stage] || { label: stage, kind: '' };
-  return <Tag kind={s.kind}>{s.label}</Tag>;
-};
+export const PoTag = ({ stage }) => <Status is={poStage(stage)} />;
 
 /* =================================================================== */
 export function PurchaseOrders() {
-  const { branchId } = useApp();
+  const { branchId, branchName, setBranch } = useApp();
   const nav = useNavigate();
   const [f, setF] = useState({ q: '', stage: 'ALL', supplierId: '', sort: 'date', overdue: false });
   const qs = new URLSearchParams({
@@ -48,124 +40,127 @@ export function PurchaseOrders() {
   const rows = data || [];
 
   const grab = () => downloadCsv('purchase-orders', [
-    ['PO', 'Date', 'Supplier', 'Deliver to', 'Expected', 'Stage', 'Lines',
-      'Ordered', 'Received', 'Pending', 'Value', 'Against'],
+    ['PO', 'Order date', 'Supplier', 'Delivered to', 'Expected', 'Status', 'Lines',
+      'Ordered', 'Received', 'Still to receive', 'Value incl. GST', 'For PRN'],
     ...rows.map((r) => [r.doc_no, dmy(r.po_date), r.supplier_name, r.deliver_to_name,
-      r.expected_date ? dmy(r.expected_date) : '', (STAGE[r.stage] || {}).label || r.stage,
+      r.expected_date ? dmy(r.expected_date) : '', poStage(r.stage).label,
       r.line_count, r.ordered_qty, r.received_qty, r.pending_qty, r.po_value, r.indent_nos]),
   ]);
 
   const counts = rows.reduce((a, r) => ({ ...a, [r.stage]: (a[r.stage] || 0) + 1 }), {});
+  const filtered = f.q || f.supplierId || f.overdue || f.stage !== 'ALL';
 
   return (
     <>
-      <PageHead title="Purchase orders" sub="Signed by the GM, then followed until everything is in"
+      <PageHead title="Purchase orders"
+        sub="Orders to suppliers: approved twice, then followed until everything is received"
         actions={
-          <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
-            <Link className="btn pri" to="/procurement">To buy</Link>
-          </div>
+          <>
+            <button className="btn" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>
+            {canWrite('/purchase-orders') && <Link className="btn pri" to="/procurement"><Icon name="cart" />Raise from To buy</Link>}
+          </>
         } />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
         <Card>
-          <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="pad searchbar" style={{ marginBottom: 0 }}>
             <Field label="Search">
-              <input className="inp" style={{ width: 220 }} placeholder="PO number, supplier, destination"
+              <input className="inp" type="search" style={{ width: 230 }} placeholder="PO number, supplier, destination…"
                 value={f.q} onChange={(e) => setF((x) => ({ ...x, q: e.target.value }))} />
             </Field>
-            <Field label="Where it is">
-              <select className="inp" style={{ width: 200 }} value={f.stage}
+            <Field label="Status">
+              <select className="inp" style={{ width: 230 }} value={f.stage}
                 onChange={(e) => setF((x) => ({ ...x, stage: e.target.value }))}>
                 <option value="ALL">Everything</option>
-                <option value="MINE">With the buyer</option>
-                <option value="PIPELINE">In the delivery pipeline</option>
-                <option value="DRAFT">Draft</option>
-                <option value="AWAITING_GM">With the GM</option>
-                <option value="RETURNED">Sent back</option>
-                <option value="AWAITING">Awaiting delivery</option>
-                <option value="PARTIAL">Part received</option>
-                <option value="RECEIVED">Received in full</option>
-                <option value="CANCELLED">Cancelled</option>
+                <option value="MINE">With Procurement (draft or sent back)</option>
+                <option value="PIPELINE">Approved, not yet received in full</option>
+                <option value="DRAFT">{poStage('DRAFT').label}</option>
+                <option value="AWAITING_GM">{poStage('AWAITING_GM').label}</option>
+                <option value="RETURNED">{poStage('RETURNED').label}</option>
+                <option value="AWAITING">{poStage('AWAITING').label}</option>
+                <option value="PARTIAL">{poStage('PARTIAL').label}</option>
+                <option value="RECEIVED">{poStage('RECEIVED').label}</option>
+                <option value="CANCELLED">{poStage('CANCELLED').label}</option>
               </select>
             </Field>
             <Field label="Supplier">
-              <select className="inp" style={{ width: 190 }} value={f.supplierId}
+              <select className="inp" style={{ width: 200 }} value={f.supplierId}
                 onChange={(e) => setF((x) => ({ ...x, supplierId: e.target.value }))}>
                 <option value="">Every supplier</option>
                 {(suppliers || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </Field>
             <Field label="Sort by">
-              <select className="inp" style={{ width: 160 }} value={f.sort}
+              <select className="inp" style={{ width: 180 }} value={f.sort}
                 onChange={(e) => setF((x) => ({ ...x, sort: e.target.value }))}>
                 <option value="date">Newest</option>
                 <option value="expected">Expected soonest</option>
                 <option value="supplier">Supplier</option>
                 <option value="value">Value</option>
-                <option value="pending">Most outstanding</option>
+                <option value="pending">Most still to receive</option>
               </select>
             </Field>
-            <label className="btn" style={{ marginBottom: 8, cursor: 'pointer' }}>
+            <label style={{ display: 'flex', gap: 7, alignItems: 'center', paddingBottom: 9, cursor: 'pointer' }}>
               <input type="checkbox" checked={f.overdue}
                 onChange={(e) => setF((x) => ({ ...x, overdue: e.target.checked }))} />
-              {' '}Overdue only
+              Overdue only
             </label>
           </div>
         </Card>
 
         {(counts.AWAITING_GM || counts.RETURNED) ? (
-          <Banner kind="warn" icon="✎">
-            {counts.AWAITING_GM ? <><b>{counts.AWAITING_GM}</b> waiting on the GM. </> : null}
-            {counts.RETURNED ? <><b>{counts.RETURNED}</b> sent back for the buyer to fix. </> : null}
-            Nothing reaches a supplier unsigned.
+          <Banner kind={counts.RETURNED ? 'warn' : 'info'} icon={counts.RETURNED ? 'alert' : 'clock'}>
+            {counts.AWAITING_GM ? <><b>{plural(counts.AWAITING_GM, 'order')}</b> awaiting approval. </> : null}
+            {counts.RETURNED ? <><b>{plural(counts.RETURNED, 'order')}</b> sent back to Procurement to change. </> : null}
+            Nothing goes to a supplier until both approvals are done.
           </Banner>
         ) : null}
 
-        {loading ? <Loading /> : (
-          <Card title={`${rows.length} order${rows.length === 1 ? '' : 's'}`}>
+        {loading && !data ? <Loading what="purchase orders" /> : (
+          <Card title={plural(rows.length, 'purchase order')}>
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th>PO</th><th>Supplier</th><th>Deliver to</th><th>Expected</th>
-                    <th className="rt">Value</th><th style={{ width: 150 }}>Delivery</th>
-                    <th>Where it is</th><th>Against</th>
+                    <th>PO</th><th>Supplier</th><th>Delivered to</th><th>Expected</th>
+                    <th className="rt">Value incl. GST</th><th style={{ width: 150 }}>Received so far</th>
+                    <th>Status</th><th>For PRN</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.po_id} className="click"
-                      onClick={() => nav(`/purchase-orders/${r.po_id}`)}>
-                      <td><Link to={`/purchase-orders/${r.po_id}`} onClick={(e) => e.stopPropagation()}>
-                        <b className="mono">{r.doc_no}</b></Link><small>{dmy(r.po_date)}</small></td>
+                    <tr key={r.po_id} className="click" tabIndex={0}
+                      onClick={() => nav(`/purchase-orders/${r.po_id}`)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') nav(`/purchase-orders/${r.po_id}`); }}>
+                      <td><Code as="b">{r.doc_no}</Code><small>{dmy(r.po_date)}</small></td>
                       <td>{r.supplier_name}</td>
                       <td>{r.deliver_to_name}
-                        <small>{r.deliver_to_type === 'STORE' ? 'store' : 'site'}</small></td>
-                      <td>
+                        <small>{r.deliver_to_type === 'STORE' ? 'Central store' : 'Straight to site'}</small></td>
+                      <td className="mono">
                         {r.expected_date ? dmy(r.expected_date) : '—'}
-                        {Number(r.overdue) === 1 && <Tag kind="bad">overdue</Tag>}
+                        {Number(r.overdue) === 1 && <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>Overdue</small>}
                       </td>
                       <td className="rt mono">{money(r.po_value)}</td>
                       <td>
                         {r.status === 'APPROVED' ? (
                           <>
-                            <Meter value={Number(r.received_qty)} max={Number(r.ordered_qty)} />
-                            <small className="mono">
-                              {qty(r.received_qty)} of {qty(r.ordered_qty)}
-                            </small>
+                            <Meter value={Number(r.received_qty)} max={Number(r.ordered_qty)} label="Received so far" />
+                            <small className="mono">{qty(r.received_qty)} of {qty(r.ordered_qty)}</small>
                           </>
-                        ) : <span style={{ color: 'var(--faint)' }}>not sent yet</span>}
+                        ) : <span style={{ color: 'var(--faint)' }}>Not with the supplier yet</span>}
                       </td>
                       <td><PoTag stage={r.stage} /></td>
-                      <td><small className="mono">{r.indent_nos || '—'}</small></td>
+                      <td>{r.indent_nos ? <Code>{r.indent_nos}</Code> : '—'}</td>
                     </tr>
                   ))}
                   {!rows.length && (
                     <tr><td colSpan={8}>
-                      <Empty title="No orders match">
-                        Clear the filters, or raise one from <Link to="/procurement">To buy</Link>.
+                      <Empty title={filtered ? 'No purchase order matches these filters'
+                        : branchId ? `No purchase orders in ${branchName}` : 'No purchase orders yet'}
+                        action={branchId && !filtered && <button className="btn" onClick={() => setBranch('ALL')}>Show all branches</button>}>
+                        {filtered ? 'Clear the filters to see every order.'
+                          : <>Orders are raised from <Link className="linkish" to="/procurement">To buy</Link>.</>}
                       </Empty>
                     </td></tr>
                   )}
@@ -179,8 +174,44 @@ export function PurchaseOrders() {
   );
 }
 
+/** Who has the order and what happens next, in words. */
+function poNext(data) {
+  const w = withWhom(data.approval);
+  const back = [...(data.events || [])].reverse().find((e) => e.action === 'RETURNED');
+  switch (data.status) {
+    case 'DRAFT':
+      return { tone: 'neutral', icon: 'draft', now: 'Draft — not sent for approval',
+        then: 'Nothing is held for these PRNs until it is sent. It needs two approvals before it can go to the supplier.' };
+    case 'SUBMITTED':
+      return { tone: 'info', icon: 'clock',
+        now: `With ${w?.who || 'the approvers'} for approval${w ? ` · level ${w.level} of ${w.levels}` : ''}`,
+        then: w?.level === 2
+          ? 'Level 1 is approved. Once Management approves, the order can go to the supplier.'
+          : 'It holds the quantity so the same PRN cannot be ordered twice, but nothing goes to the supplier and nothing can be received until both approvals are done.' };
+    case 'RETURNED':
+      return { tone: 'attention', icon: 'alert',
+        now: `Sent back${back?.user_name ? ` by ${back.user_name}` : ''}${back?.created_at ? ` on ${dmy(back.created_at)}` : ''}`,
+        quote: back?.note || undefined,
+        then: 'Change it and send it for approval again, or cancel it. Approval starts again at level 1.' };
+    case 'APPROVED':
+      return Number(data.pending_qty) > 0
+        ? { tone: Number(data.overdue) === 1 ? 'attention' : 'info', icon: 'truck',
+          now: Number(data.received_qty) > 0
+            ? `Approved · partly received — ${qty(data.pending_qty)} still to receive`
+            : `Approved · with the supplier — nothing received yet`,
+          then: Number(data.overdue) === 1
+            ? `Past the expected date (${dmy(data.expected_date)}). The order stays open until everything arrives.`
+            : `Expected by ${data.expected_date ? dmy(data.expected_date) : 'no date given'}. It stays open until everything arrives.` }
+        : { tone: 'done', icon: 'check', now: 'Received in full', then: 'Everything ordered has arrived.' };
+    case 'CANCELLED':
+      return { tone: 'stopped', icon: 'stop', now: 'Cancelled', then: 'Nothing can be received against it.' };
+    default:
+      return { tone: 'neutral', now: poStage(data.stage).label };
+  }
+}
+
 /* ===================================================================
-   One order, end to end: what it covers, what has arrived, who signed.
+   One order, end to end: what it covers, what has arrived, who approved.
    =================================================================== */
 export function PurchaseOrderDetail() {
   const { id } = useParams();
@@ -192,16 +223,18 @@ export function PurchaseOrderDetail() {
   const [receiving, setReceiving] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  if (loading) return <Loading />;
-  if (error) return <div className="page-body"><ErrorNote error={error} onRetry={reload} /></div>;
+  if (loading && !data) return <Loading what="the purchase order" />;
+  if (error) return <div className="page-body" style={{ paddingTop: 24 }}><ErrorNote error={error} onRetry={reload} /></div>;
 
+  const level = data.approval?.level || 1;
   const decide = async () => {
     setBusy(true);
     try {
-      if (sign === 'CANCELLED') await api.post(`/purchase-orders/${id}/cancel`, { note });
-      else await api.post(`/purchase-orders/${id}/decide`, { action: sign, note: note || undefined });
-      toast(sign === 'APPROVED' ? 'Signed — it can go to the supplier'
-        : sign === 'RETURNED' ? 'Sent back to the buyer' : 'Cancelled', 'ok');
+      let r;
+      if (sign === 'CANCELLED') r = await api.post(`/purchase-orders/${id}/cancel`, { note });
+      else r = await api.post(`/purchase-orders/${id}/decide`, { action: sign, note: note || undefined });
+      toast(r?.message || (sign === 'APPROVED' ? `${data.doc_no} approved`
+        : sign === 'RETURNED' ? `${data.doc_no} sent back to Procurement` : `${data.doc_no} cancelled`), 'ok');
       setSign(null); setNote(''); reload();
     } catch (e) { toast(e.message, 'bad'); }
     setBusy(false);
@@ -210,7 +243,7 @@ export function PurchaseOrderDetail() {
   const submit = async () => {
     try {
       await api.post(`/purchase-orders/${id}/submit`);
-      toast('Sent to the GM', 'ok');
+      toast(`${data.doc_no} sent for approval`, 'ok');
       reload();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -218,88 +251,76 @@ export function PurchaseOrderDetail() {
   const grab = () => downloadCsv(`po-${data.doc_no}`, [
     ['Purchase order', data.doc_no],
     ['Supplier', data.supplier_name], ['GSTIN', data.supplier_gstin || ''],
-    ['Deliver to', data.deliver_to_name],
+    ['Delivered to', data.deliver_to_name],
     ['Order date', dmy(data.po_date)], ['Expected', data.expected_date ? dmy(data.expected_date) : ''],
-    ['Against', data.indents.map((i) => i.doc_no).join(', ')],
-    ['Where it is', (STAGE[data.stage] || {}).label || data.stage],
+    ['For PRN', data.indents.map((i) => i.doc_no).join(', ')],
+    ['Status', poStage(data.stage).label],
     [],
-    ['Item code', 'Item', 'Unit', 'Ordered', 'Received', 'Pending', 'Rate', 'GST %', 'Amount', 'Against'],
+    ['Item code', 'Item', 'Unit', 'Ordered', 'Received', 'Still to receive', 'Rate', 'GST %', 'Amount', 'For PRN'],
     ...data.lines.map((l) => [l.item_code, l.item_name, l.uom, l.ordered_qty, l.received_qty,
       l.pending_qty, l.rate, l.gst_rate, l.total, l.against || '']),
     [], ['', '', '', '', '', '', '', 'Total', data.po_value],
   ]);
 
+  const mayDecide = data.canApprove && canWrite(`/purchase-orders/${id}/decide`);
+  const next = poNext(data);
+
   return (
     <>
-      <PageHead title={data.doc_no}
-        sub={`${data.supplier_name} · to ${data.deliver_to_name} · ${dmy(data.po_date)}`}
+      <DocHead kind="Purchase order"
+        back={<button type="button" className="btn sm ghost" style={{ marginLeft: -8 }} onClick={() => nav('/purchase-orders')}><Icon name="arrowLeft" size={14} />Purchase orders</button>}
+        docNo={<Code>{data.doc_no}</Code>}
+        status={<Status is={poStage(data.stage)} lg />}
+        meta={[<b>{data.supplier_name}</b>, `Delivered to ${data.deliver_to_name}`, `Ordered ${dmy(data.po_date)}`,
+          <>Value <b className="mono">{money(data.po_value)}</b> incl. GST</>]}
         actions={
-          <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => nav('/purchase-orders')}>Back</button>
-            <button className="btn" onClick={grab}>Download</button>
-            {data.canEdit && canWrite('/purchase-orders') && <button className="btn pri" onClick={submit}>Send to the GM</button>}
-            {data.canSign && canWrite(`/purchase-orders/${id}/decide`) && (
+          <>
+            <button className="btn" onClick={grab}><Icon name="download" size={14} />Download</button>
+            {['DRAFT', 'RETURNED', 'SUBMITTED', 'APPROVED'].includes(data.status)
+              && Number(data.received_qty) === 0 && canWrite(`/purchase-orders/${id}/cancel`) && (
+              <button className="btn bad" onClick={() => setSign('CANCELLED')}>Cancel order</button>
+            )}
+            {data.canEdit && canWrite('/purchase-orders') && (
+              <button className="btn pri" onClick={submit}><Icon name="send" />Send for approval</button>
+            )}
+            {mayDecide && (
               <>
-                <button className="btn bad" onClick={() => setSign('RETURNED')}>Send back</button>
-                <button className="btn pri" onClick={() => setSign('APPROVED')}>Sign it</button>
+                <button className="btn" onClick={() => setSign('RETURNED')}>Send back</button>
+                <button className="btn pri" onClick={() => setSign('APPROVED')}><Icon name="check" />Approve PO</button>
               </>
             )}
             {data.status === 'APPROVED' && Number(data.pending_qty) > 0 && canWrite(`/purchase-orders/${id}/receipts`) && (
-              <button className="btn pri" onClick={() => setReceiving(true)}>Receive</button>
+              <button className="btn pri" onClick={() => setReceiving(true)}>Receive delivery</button>
             )}
-            {['DRAFT', 'RETURNED', 'SUBMITTED', 'APPROVED'].includes(data.status)
-              && Number(data.received_qty) === 0 && canWrite(`/purchase-orders/${id}/cancel`) && (
-              <button className="btn bad" onClick={() => setSign('CANCELLED')}>Cancel</button>
-            )}
-          </div>
+          </>
         } />
 
       <div className="page-body">
-        {data.status === 'RETURNED' && (
-          <Banner kind="bad" icon="↩">
-            <b>Sent back by the GM.</b>{' '}
-            {(data.events.filter((e) => e.action === 'RETURNED').slice(-1)[0] || {}).note}
-            {' '}Fix it and send it again, or cancel it.
-          </Banner>
-        )}
-        {data.status === 'SUBMITTED' && (
-          <Banner kind="warn" icon="✎">
-            <b>Waiting for the GM.</b> It holds the quantity so the same requirement cannot be
-            ordered twice, but nothing goes to the supplier and nothing can be received until it is signed.
-          </Banner>
-        )}
-        {Number(data.overdue) === 1 && (
-          <Banner kind="bad" icon="!">
-            <b>Past the expected date</b> with {qty(data.pending_qty)} still to come.
-          </Banner>
-        )}
+        <NextStep {...next} />
 
         <div className="grid2">
           <div>
-            <Card title="Lines" sub="Ordered, what has arrived, and what is still owed">
+            <Card title="Items ordered" sub="Ordered, received, and what is still to receive">
               <div className="tw">
                 <table className="sheet">
                   <thead>
                     <tr>
-                      <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
+                      <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
                       <th className="rt">Ordered</th><th className="rt">Received</th>
-                      <th className="rt">Pending</th><th className="rt">Rate</th>
+                      <th className="rt">Still to receive</th><th className="rt">Rate</th>
                       <th className="rt">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.lines.map((l) => (
                       <tr key={l.po_line_id}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.item_code}</td>
+                        <td><Code>{l.item_code}</Code></td>
                         <td>{l.item_name}
-                          {l.against && <small>for {l.against}</small>}</td>
+                          {l.against && <small>For <Code>{l.against}</Code></small>}</td>
                         <td>{l.uom}</td>
                         <td className="rt mono">{qty(l.ordered_qty)}</td>
                         <td className="rt mono">{Number(l.received_qty) ? qty(l.received_qty) : '—'}</td>
-                        <td className="rt mono"
-                          style={{ color: Number(l.pending_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
-                          <b>{Number(l.pending_qty) ? qty(l.pending_qty) : 'nil'}</b>
-                        </td>
+                        <td className="rt mono"><b>{Number(l.pending_qty) ? qty(l.pending_qty) : '—'}</b></td>
                         <td className="rt mono">{money(l.rate)}<small>{l.gst_rate}% GST</small></td>
                         <td className="rt mono">{money(l.total)}</td>
                       </tr>
@@ -315,21 +336,21 @@ export function PurchaseOrderDetail() {
               </div>
             </Card>
 
-            <Card title="Deliveries" sub={`${data.receipts.length} so far`}>
+            <Card title="Deliveries received" sub={`${plural(data.receipts.length, 'GRN')} so far`}>
               {data.receipts.length ? (
                 <div className="tw">
                   <table>
                     <thead>
-                      <tr><th>Receipt</th><th>Date</th><th>Their DC</th><th>At</th>
-                        <th className="rt">Qty</th><th>By</th></tr>
+                      <tr><th>GRN</th><th>Received on</th><th>Supplier's challan</th><th>Received at</th>
+                        <th className="rt">Units</th><th>Received by</th></tr>
                     </thead>
                     <tbody>
                       {data.receipts.map((g) => (
                         <tr key={g.id}>
-                          <td><b className="mono">{g.doc_no}</b>
-                            {g.status === 'DRAFT' && <Tag kind="warn">draft</Tag>}</td>
-                          <td>{dmy(g.receipt_date)}</td>
-                          <td className="mono">{g.supplier_dc || '—'}</td>
+                          <td><Link className="linkish" to={`/grns/${g.id}`}><Code>{g.doc_no}</Code></Link>
+                            {g.status === 'DRAFT' && <small><Status tone="attention" label="Not in stock yet" /></small>}</td>
+                          <td className="mono">{dmy(g.receipt_date)}</td>
+                          <td>{g.supplier_dc ? <Code>{g.supplier_dc}</Code> : '—'}</td>
                           <td>{g.received_at_name}</td>
                           <td className="rt mono">{qty(g.qty)}</td>
                           <td>{g.received_by_name || '—'}</td>
@@ -339,40 +360,39 @@ export function PurchaseOrderDetail() {
                   </table>
                 </div>
               ) : (
-                <Empty title="Nothing has arrived yet">
+                <Empty title="Nothing has been received yet">
                   {data.status === 'APPROVED'
-                    ? 'It is with the supplier.'
-                    : 'It has not been sent to the supplier yet.'}
+                    ? 'The order is with the supplier.'
+                    : 'The order has not gone to the supplier yet.'}
                 </Empty>
               )}
             </Card>
           </div>
 
           <div>
-            <Card title="Where it is">
+            <Card title="Details">
               <div className="pad">
-                <div style={{ marginBottom: 12 }}><PoTag stage={data.stage} /></div>
                 {data.status === 'APPROVED' && (
-                  <>
-                    <Meter value={Number(data.received_qty)} max={Number(data.ordered_qty)} />
+                  <div style={{ marginBottom: 12 }}>
+                    <Meter value={Number(data.received_qty)} max={Number(data.ordered_qty)} label="Received" />
                     <small style={{ color: 'var(--muted)' }}>
                       {qty(data.received_qty)} of {qty(data.ordered_qty)} received
                     </small>
-                  </>
+                  </div>
                 )}
-                <table style={{ marginTop: 12 }}>
+                <table>
                   <tbody>
-                    <tr><td style={{ color: 'var(--muted)' }}>Supplier</td>
+                    <tr><td style={{ color: 'var(--muted)', width: 120 }}>Supplier</td>
                       <td><b>{data.supplier_name}</b>
-                        {data.supplier_gstin && <small className="mono">{data.supplier_gstin}</small>}</td></tr>
-                    <tr><td style={{ color: 'var(--muted)' }}>Terms</td>
-                      <td>{data.terms_days} days</td></tr>
-                    <tr><td style={{ color: 'var(--muted)' }}>Deliver to</td>
+                        {data.supplier_gstin && <small><Code>{data.supplier_gstin}</Code></small>}</td></tr>
+                    <tr><td style={{ color: 'var(--muted)' }}>Payment terms</td>
+                      <td>{plural(data.terms_days, 'day')}</td></tr>
+                    <tr><td style={{ color: 'var(--muted)' }}>Delivered to</td>
                       <td>{data.deliver_to_name}</td></tr>
                     <tr><td style={{ color: 'var(--muted)' }}>Expected</td>
-                      <td>{data.expected_date ? dmy(data.expected_date) : '—'}</td></tr>
+                      <td className="mono">{data.expected_date ? dmy(data.expected_date) : '—'}</td></tr>
                     {data.decided_by_name && (
-                      <tr><td style={{ color: 'var(--muted)' }}>Signed by</td>
+                      <tr><td style={{ color: 'var(--muted)' }}>Final approval</td>
                         <td>{data.decided_by_name}<small>{dmy(data.decided_at)}</small></td></tr>
                     )}
                     <tr><td style={{ color: 'var(--muted)' }}>Raised by</td>
@@ -380,20 +400,20 @@ export function PurchaseOrderDetail() {
                   </tbody>
                 </table>
                 {data.notes && (
-                  <p style={{ marginTop: 12, color: 'var(--muted)', fontSize: 12.5 }}>{data.notes}</p>
+                  <p style={{ marginTop: 12, color: 'var(--muted)', fontSize: 13 }}>Note to supplier: {data.notes}</p>
                 )}
               </div>
             </Card>
 
-            <Card title="What it is filling">
+            <Card title="PRNs this order supplies">
               <div className="tw">
                 <table>
                   <tbody>
                     {data.indents.map((i) => (
                       <tr key={i.id}>
-                        <td><Link to={`/indents/${i.id}`}><b className="mono">{i.doc_no}</b></Link></td>
+                        <td><Link className="linkish" to={`/indents/${i.id}`}><Code>{i.doc_no}</Code></Link></td>
                         <td>{i.site_name}</td>
-                        <td className="rt">{i.needed_by ? dmy(i.needed_by) : '—'}</td>
+                        <td className="rt mono">{i.needed_by ? <>needed by {dmy(i.needed_by)}</> : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -407,9 +427,7 @@ export function PurchaseOrderDetail() {
                   <tbody>
                     {data.events.map((e, n) => (
                       <tr key={n}>
-                        <td><Tag kind={e.action === 'APPROVED' ? 'ok'
-                          : e.action === 'RETURNED' || e.action === 'CANCELLED' ? 'bad' : ''}>
-                          {e.action}</Tag></td>
+                        <td><Status tone={eventTone(e.action)} label={eventWord(e.action)} /></td>
                         <td>{e.user_name || '—'}<small>{dmy(e.created_at)}</small></td>
                         <td>{e.note || ''}</td>
                       </tr>
@@ -426,129 +444,44 @@ export function PurchaseOrderDetail() {
       </div>
 
       {sign && (
-        <Modal title={sign === 'APPROVED' ? `Sign ${data.doc_no}`
-          : sign === 'RETURNED' ? `Send ${data.doc_no} back` : `Cancel ${data.doc_no}`}
-          sub={sign === 'APPROVED' ? 'It goes to the supplier once signed' : undefined}
+        <Modal title={sign === 'APPROVED' ? `Approve ${data.doc_no}?`
+          : sign === 'RETURNED' ? `Send ${data.doc_no} back to Procurement?` : `Cancel ${data.doc_no}?`}
           onClose={() => { setSign(null); setNote(''); }}
           footer={<>
-            <button className="btn" onClick={() => { setSign(null); setNote(''); }}>Cancel</button>
-            <button className={`btn ${sign === 'APPROVED' ? 'pri' : 'bad'}`} disabled={busy}
-              onClick={decide}>
-              {sign === 'APPROVED' ? 'Sign it' : sign === 'RETURNED' ? 'Send it back' : 'Cancel the order'}
+            <button className="btn" onClick={() => { setSign(null); setNote(''); }}>Go back</button>
+            <button className={`btn ${sign === 'APPROVED' ? 'pri' : 'bad'}`}
+              disabled={busy || (sign !== 'APPROVED' && !note.trim())} onClick={decide}>
+              {busy ? 'Saving…' : sign === 'APPROVED' ? 'Approve PO' : sign === 'RETURNED' ? 'Send back' : 'Cancel order'}
             </button>
           </>}>
+          <p className="consequence">
+            {sign === 'APPROVED'
+              ? (level === 1
+                ? 'This is level 1 of 2. It then goes to Management for level 2; the supplier gets it after both.'
+                : 'This is the final approval. The order can go to the supplier, and the store can receive against it.')
+              : sign === 'RETURNED'
+                ? 'It goes back to Procurement with your reason. They change it and send it again; approval starts again at level 1.'
+                : 'The order is cancelled. Nothing can be received against it, and its PRNs go back on To buy.'}
+          </p>
           {sign === 'APPROVED' && (
-            <Banner kind="info" icon="₹">
-              {money(data.po_value)} to {data.supplier_name}, delivered to {data.deliver_to_name}.
+            <Banner kind="info">
+              <b className="mono">{money(data.po_value)}</b> to {data.supplier_name}, delivered to {data.deliver_to_name}.
             </Banner>
           )}
-          <Field label={sign === 'APPROVED' ? 'Note (optional)' : 'Why'}
-            hint={sign === 'APPROVED' ? undefined : 'The buyer sees this. Be specific enough to act on.'}>
+          <Field label={sign === 'APPROVED' ? 'Note (optional)' : 'Reason'}
+            hint={sign === 'APPROVED' ? undefined : 'Required — Procurement sees this. Be specific enough to act on.'}>
             <textarea className="inp" rows={3} value={note} onChange={(e) => setNote(e.target.value)}
               placeholder={sign === 'RETURNED'
-                ? 'e.g. rate is above the last comparison, renegotiate before sending'
+                ? 'e.g. The rate is above the last comparison — renegotiate before sending'
                 : ''} />
           </Field>
         </Modal>
       )}
 
       {receiving && (
-        <ReceiveModal poId={id} onClose={() => setReceiving(false)}
+        <ReceiveGrn poId={id} onClose={() => setReceiving(false)}
           onDone={() => { setReceiving(false); reload(); }} />
       )}
     </>
-  );
-}
-
-/* =================================================================== */
-function ReceiveModal({ poId, onClose, onDone }) {
-  const toast = useToast();
-  const { data, loading } = useApi(`/purchase-orders/${poId}/pending`, [poId]);
-  const [got, setGot] = useState({});
-  const [head, setHead] = useState({ receiptDate: today(), supplierDc: '', note: '' });
-  const [busy, setBusy] = useState(false);
-
-  const lines = (data?.lines || []).filter((l) => Number(got[l.po_line_id]) > 0);
-
-  const save = async () => {
-    if (!lines.length) return toast('Enter what actually arrived', 'bad');
-    setBusy(true);
-    try {
-      const r = await api.post(`/purchase-orders/${poId}/receipts`, {
-        receiptDate: head.receiptDate,
-        supplierDc: head.supplierDc || undefined,
-        note: head.note || undefined,
-        lines: lines.map((l) => ({ poLineId: l.po_line_id, qty: Number(got[l.po_line_id]) })),
-      });
-      toast(r.poState === 'RECEIVED'
-        ? `${r.docNo} — the order is now complete`
-        : `${r.docNo} — ${qty(r.pendingQty)} still to come`, 'ok');
-      onDone();
-    } catch (e) { toast(e.message, 'bad'); }
-    setBusy(false);
-    return undefined;
-  };
-
-  if (loading) return <Modal wide title="Receive" onClose={onClose}><Loading /></Modal>;
-
-  return (
-    <Modal wide title={`Receive against ${data.docNo}`}
-      sub={`${data.supplier} · at ${data.receivedAtName}`}
-      onClose={onClose}
-      footer={<>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn" onClick={() => setGot(Object.fromEntries(
-          data.lines.map((l) => [l.po_line_id, String(l.pending_qty)])))}>Everything arrived</button>
-        <button className="btn pri" disabled={busy} onClick={save}>Confirm receipt</button>
-      </>}>
-      <Banner kind="info" icon="↓">
-        Enter what actually came off the lorry. Anything short stays on the order and it remains in
-        the delivery pipeline until it is complete.
-      </Banner>
-      <div className="row2">
-        <Field label="Received on">
-          <input className="inp" type="date" value={head.receiptDate}
-            onChange={(e) => setHead((h) => ({ ...h, receiptDate: e.target.value }))} />
-        </Field>
-        <Field label="Their challan / invoice no.">
-          <input className="inp" value={head.supplierDc}
-            onChange={(e) => setHead((h) => ({ ...h, supplierDc: e.target.value }))} />
-        </Field>
-      </div>
-      <div className="tw">
-        <table className="sheet">
-          <thead>
-            <tr>
-              <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
-              <th className="rt" style={{ width: 90 }}>Ordered</th>
-              <th className="rt" style={{ width: 90 }}>Still owed</th>
-              <th className="rt" style={{ width: 100 }}>Arrived</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.lines.map((l) => (
-              <tr key={l.po_line_id}
-                style={Number(got[l.po_line_id]) > 0 ? { background: 'var(--brand-soft)' } : undefined}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.item_code}</td>
-                <td>{l.item_name}</td>
-                <td>{l.uom}</td>
-                <td className="rt mono">{qty(l.ordered_qty)}</td>
-                <td className="rt mono"><b>{qty(l.pending_qty)}</b></td>
-                <td><input className="inp rt" type="number" min="0" step="any" placeholder="—"
-                  value={got[l.po_line_id] ?? ''}
-                  onChange={(e) => setGot((x) => ({ ...x, [l.po_line_id]: e.target.value }))} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <Field label="Note">
-          <input className="inp" value={head.note}
-            onChange={(e) => setHead((h) => ({ ...h, note: e.target.value }))}
-            placeholder="e.g. two drums damaged, sent back with the driver" />
-        </Field>
-      </div>
-    </Modal>
   );
 }

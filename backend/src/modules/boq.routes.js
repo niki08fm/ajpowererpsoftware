@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
 const chain = require('../lib/approvals');
+const { plural } = require('../lib/words');
 
 /**
  * The BOQ. Each work order line prepared as items from the master.
@@ -142,6 +143,8 @@ router.get('/:id', wrap(async (req, res) => {
     overLines: boq.over_line_count, worstOverPct: boq.worst_over_pct,
     amendedOn: boq.amended_on,
     woLines: woLines.map((w) => ({ ...w, items: byWo.get(w.wo_line_id) || [] })),
+    // whose desk it is on and at which level, with names
+    approval: await chain.trail('BOQ', boq.id, req.user?.id),
   });
 }));
 
@@ -209,7 +212,7 @@ router.put('/:id/wo-line/:woLineId',
       }
       await log(conn, {
         entity: 'BOQ', entityId: boq.id, docNo: boq.doc_no, action: 'Line prepared',
-        detail: `WO line ${wol.sno} · ${req.body.items.length} item(s)`, user: req.user,
+        detail: `WO line ${wol.sno} · ${plural(req.body.items.length, 'item')}`, user: req.user,
       });
     });
 
@@ -242,7 +245,8 @@ router.post('/:id/submit',
     if (boq.status === 'SUBMITTED') throw conflict('Already waiting for approval');
     if (boq.prepared_count !== boq.wo_line_count) {
       throw badRequest(
-        `${boq.wo_line_count - boq.prepared_count} work order line(s) are not prepared yet`,
+        (boq.wo_line_count - boq.prepared_count === 1 ? '1 work order line is not prepared yet'
+          : `${boq.wo_line_count - boq.prepared_count} work order lines are not prepared yet`),
         { prepared: boq.prepared_count, ofLines: boq.wo_line_count }
       );
     }
@@ -269,7 +273,7 @@ router.post('/:id/submit',
     });
     res.json({
       ok: true, docNo: boq.doc_no, status: 'SUBMITTED',
-      message: `${boq.doc_no} is with the site GM; it locks once Management has signed too`,
+      message: `${boq.doc_no} is with the site GM for approval; it locks once Management approves too`,
       policy: { overAllow, overPct: overAllow ? overPct : 0 },
     });
   })
@@ -291,7 +295,7 @@ router.post('/:id/decide',
     const boq = await one(`SELECT * FROM boqs WHERE id = ?`, [req.params.id]);
     if (!boq) throw notFound('No such BOQ');
     if (boq.status !== 'SUBMITTED') {
-      throw conflict(`This BOQ is ${boq.status.toLowerCase()}, not waiting for a signature`);
+      throw conflict(`This BOQ is ${boq.status.toLowerCase()}, not waiting for approval`);
     }
     if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
       throw badRequest('Say why it is going back');
@@ -315,8 +319,8 @@ router.post('/:id/decide',
       message: req.body.action === 'RETURNED'
         ? `${boq.doc_no} is back in draft with planning`
         : step.done
-          ? `${boq.doc_no} is approved and locked — the site can indent against it`
-          : `${boq.doc_no} is signed by the GM and now waits for Management`,
+          ? `${boq.doc_no} is approved and locked — the site can raise PRNs against it`
+          : `${boq.doc_no} is approved at level 1 (GM) and is now with Management`,
     });
   })
 );

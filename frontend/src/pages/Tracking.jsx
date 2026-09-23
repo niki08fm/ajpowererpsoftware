@@ -4,7 +4,7 @@ import { useApp, PageHead } from '../App';
 import { api, qty, dmy, today, addDays, withBranch } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, ItemPicker,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Stat, ItemPicker, Code, Status,
 } from '../components/ui';
 import { TrendChart, RankBars, shortNum } from '../components/charts';
 import { IssueCard } from './Consumption';
@@ -103,17 +103,15 @@ function SitePicker({ value, onChange, label = 'Site', allLabel = 'Every site' }
   );
 }
 
-const KIND_TONE = {
-  GRN: 'ok', DC_IN: 'ok', RETURN: 'ok',
-  ISSUE: 'warn', DC_OUT: 'warn', ADJUST: 'brand',
-};
+// in and out are directions, not good and bad: no status colour here
+const KIND_IN = { GRN: true, DC_IN: true, RETURN: true };
 const KIND_WORD = {
-  GRN: 'Received', DC_IN: 'Signed for', DC_OUT: 'Sent out',
-  ISSUE: 'Issued', RETURN: 'Returned', ADJUST: 'Adjusted',
+  GRN: 'Received from supplier', DC_IN: 'Received off a challan', DC_OUT: 'Dispatched',
+  ISSUE: 'Issued to worker', RETURN: 'Taken back from worker', ADJUST: 'Adjusted',
 };
 
 const KindTag = ({ kind }) => (
-  <Tag kind={KIND_TONE[kind] || ''}>{KIND_WORD[kind] || kind}</Tag>
+  <Status tone="neutral" icon={KIND_IN[kind] ? 'arrowLeft' : 'arrowRight'} label={KIND_WORD[kind] || kind} />
 );
 
 /* ===================================================================
@@ -226,11 +224,11 @@ export function Transactions() {
         {loading || !data ? <Loading /> : (
           <>
             <div className="stats">
-              <Stat n={data.totals.moves} label="movements" />
-              <Stat n={data.totals.items} label="items touched" />
-              <Stat n={qty(data.totals.inQty)} label="units in" tone="ok" />
-              <Stat n={qty(data.totals.outQty)} label="units out" tone="warn" />
-              <Stat n={data.totals.sites} label="places" />
+              <Stat n={data.totals.moves} label="movements" one="movement" />
+              <Stat n={data.totals.items} label="items touched" one="item touched" />
+              <Stat n={qty(data.totals.inQty)} label="units in" one="unit in" tone="ok" />
+              <Stat n={qty(data.totals.outQty)} label="units out" one="unit out" />
+              <Stat n={data.totals.sites} label="places" one="place" />
             </div>
 
             {data.truncated && (
@@ -264,7 +262,7 @@ export function Transactions() {
                             <span style={{ color: 'var(--muted)', fontSize: 11 }}> · store</span>
                           )}
                         </td>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                        <td><Code>{r.item_code}</Code></td>
                         <td>{r.item_name}</td>
                         <td>{r.uom}</td>
                         <td><KindTag kind={r.kind} /></td>
@@ -390,10 +388,10 @@ function AuditByItem({ f, set }) {
         <>
           <div className="stats">
             <Stat n={qty(data.totals.onHand)} label={`${data.item.uom} on hand now`} />
-            <Stat n={qty(data.totals.inQty)} label="units in" tone="ok" />
-            <Stat n={qty(data.totals.outQty)} label="units out" tone="warn" />
+            <Stat n={qty(data.totals.inQty)} label="units in" one="unit in" tone="ok" />
+            <Stat n={qty(data.totals.outQty)} label="units out" one="unit out" tone="warn" />
             <Stat n={qty(data.totals.consumedQty)} label="consumed" />
-            <Stat n={data.totals.moves} label="movements" />
+            <Stat n={data.totals.moves} label="movements" one="movement" />
           </div>
 
           <div className="grid2">
@@ -410,9 +408,7 @@ function AuditByItem({ f, set }) {
                         <td>
                           <b>{b.site_name}</b>
                           {b.site_type === 'STORE' && (
-                            <Tag kind={b.is_central ? 'brand' : ''}>
-                              {b.is_central ? 'central' : 'store'}
-                            </Tag>
+                            <small>{b.is_central ? 'Central store' : 'Store'}</small>
                           )}
                         </td>
                         <td className="rt mono"><b>{qty(b.qty)}</b></td>
@@ -612,11 +608,11 @@ function AuditByPerson({ f, set }) {
           )}
 
           <div className="stats">
-            <Stat n={one.data.totals.issues} label="issues" />
-            <Stat n={one.data.totals.returns} label="returns" />
-            <Stat n={one.data.totals.items} label="different items" />
-            <Stat n={qty(one.data.totals.outstandingQty)} label="units consumed" />
-            <Stat n={one.data.totals.lines} label="lines" />
+            <Stat n={one.data.totals.issues} label="issues" one="issue" />
+            <Stat n={one.data.totals.returns} label="returns" one="return" />
+            <Stat n={one.data.totals.items} label="different items" one="item" />
+            <Stat n={qty(one.data.totals.outstandingQty)} label="units consumed" one="unit consumed" />
+            <Stat n={one.data.totals.lines} label="lines" one="line" />
           </div>
 
           <div className="grid2">
@@ -633,7 +629,7 @@ function AuditByPerson({ f, set }) {
                     {one.data.byItem.map((r) => (
                       <tr key={r.item_id} style={{ cursor: 'pointer' }}
                         onClick={() => set({ by: 'item', item: r.item_id, name: '' })}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                        <td><Code>{r.item_code}</Code></td>
                         <td>{r.item_name}</td>
                         <td className="rt mono">{qty(r.issued_qty)}</td>
                         <td className="rt mono">{qty(r.returned_qty)}</td>
@@ -670,15 +666,14 @@ function AuditByPerson({ f, set }) {
                   {one.data.lines.map((l) => (
                     <tr key={`${l.source}-${l.line_id}`}>
                       <td>{dmy(l.event_date)}</td>
-                      <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.doc_no}</td>
+                      <td><Code>{l.doc_no}</Code></td>
                       <td style={{ color: 'var(--muted)' }}>{l.site_name}</td>
-                      <td className="mono">{l.item_code}</td>
+                      <td><Code>{l.item_code}</Code></td>
                       <td>{l.item_name}</td>
                       <td>{l.uom}</td>
                       <td>
-                        <Tag kind={l.source === 'ISSUE' ? 'warn' : 'ok'}>
-                          {l.source === 'ISSUE' ? 'Issued' : 'Returned'}
-                        </Tag>
+                        <Status tone="neutral" icon={l.source === 'ISSUE' ? 'arrowRight' : 'undo'}
+                          label={l.source === 'ISSUE' ? 'Issued to worker' : 'Taken back from worker'} />
                       </td>
                       <td className="rt mono"><b>{qty(l.qty)}</b></td>
                       <td style={{ color: 'var(--muted)' }}>{l.purpose || l.remark || '—'}</td>
@@ -771,15 +766,16 @@ export function Consumed() {
         {loading || !data ? <Loading /> : (
           <>
             <div className="stats">
-              <Stat n={data.totals.items} label="items used" />
+              <Stat n={data.totals.items} label="items used" one="item used" />
               <Stat n={qty(data.totals.consumedQty)} label={oneDay
-                ? `units used on ${dmy(f.from)}` : 'units consumed'} />
-              <Stat n={data.totals.people} label="people" />
-              <Stat n={data.totals.sites} label={data.totals.sites === 1 ? 'site' : 'sites'} />
+                ? `units used on ${dmy(f.from)}` : 'units consumed'}
+                one={oneDay ? `unit used on ${dmy(f.from)}` : 'unit consumed'} />
+              <Stat n={data.totals.people} label="people" one="person" />
+              <Stat n={data.totals.sites} label="sites" one="site" />
             </div>
 
             <Banner kind="info" icon="Σ">
-              Consumed is <b>issued less returned</b>. Anything issued and not brought back has
+              Consumed is <b>issued less taken back</b>. Anything issued and not brought back has
               been used — that is what issuing it means.{' '}
               {f.from
                 ? <>This window starts at {dmy(f.from)}; the running line on the chart carries
@@ -831,7 +827,7 @@ export function Consumed() {
                   <tbody>
                     {rows.map((r) => (
                       <tr key={r.item_id}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                        <td><Code>{r.item_code}</Code></td>
                         <td><b>{r.item_name}</b></td>
                         <td>{r.uom}</td>
                         <td className="rt mono"><b>{qty(r.consumed_qty)}</b></td>

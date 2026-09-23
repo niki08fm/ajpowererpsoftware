@@ -2,11 +2,20 @@ import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { AmendSheet, BoqHistory } from './BoqAmend';
-import { api, qty, withBranch, canWrite } from '../api';
+import { api, qty, withBranch, canWrite, plural } from '../api';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Meter, Modal, Field,
-  ItemPicker, useToast, Banner, Stat,
+  useApi, Card, Empty, Loading, ErrorNote, Meter, Modal, Field, ItemPicker, useToast, Banner, Stat, Code,
+  Status, useDialog,
 } from '../components/ui';
+import { Icon } from '../components/icons';
+
+/** A BOQ's status in words: draft, awaiting approval, locked, amendment due. */
+const BoqStatus = ({ b }) => (b.state === 'AMENDMENT_DUE'
+  ? <Status tone="attention" icon="alert" label={`Amendment due · ${Number(b.worst_over_pct ?? b.worstOverPct).toFixed(1)}% over`}
+    hint="A PRN went past the estimate; Planning records a variation to put it right" />
+  : b.status === 'LOCKED' ? <Status tone="done" icon="lock" label="Approved · locked" hint="PRNs are measured against it" />
+    : b.status === 'SUBMITTED' ? <Status tone="info" label="Awaiting approval" hint="With the site's GM, then Management. It locks once both approve." />
+      : <Status tone="neutral" label="Draft" hint="Being prepared; not sent for approval" />);
 
 /* ===================================================================
    The list: BOQs, and the work orders still waiting for one.
@@ -32,18 +41,19 @@ export function BoqList() {
 
   return (
     <>
-      <PageHead title="BOQ" sub="Every work order line prepared as items from the master" />
+      <PageHead title="BOQ" sub="What each work order line is made of, item by item — and the estimate every PRN is measured against" />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
-        <Banner kind="info" icon="▤">
+        <Banner kind="info">
           The <b>work order</b> is the client's — their scope, their quantity, their rate. The <b>BOQ</b> is
-          ours: what each of those lines is actually made of. Nothing can be indented until it exists.
+          ours: what each of those lines is actually made of. A site cannot raise a PRN until its BOQ is
+          approved and locked.
         </Banner>
 
-        {loading ? <Loading /> : (
+        {loading && !data ? <Loading what="BOQs" /> : (
           <>
             {waiting.length > 0 && (
-              <Card title="Work orders waiting for a BOQ" sub="Nothing can be indented against these yet">
+              <Card title="Work orders waiting for a BOQ" sub="No PRN can be raised against these yet">
                 <div className="tw">
                   <table>
                     <thead><tr><th>Site</th><th>Work order</th><th className="rt">Lines</th><th /></tr></thead>
@@ -51,7 +61,7 @@ export function BoqList() {
                       {waiting.map((w) => (
                         <tr key={w.work_order_id}>
                           <td><b>{w.site_name}</b></td>
-                          <td className="mono">{w.client_wo_no || w.doc_no}</td>
+                          <td><Code>{w.client_wo_no || w.doc_no}</Code></td>
                           <td className="rt mono">{w.line_count}</td>
                           <td className="rt">
                             <button className="btn sm pri" onClick={() => start(w.work_order_id)}>Prepare BOQ</button>
@@ -70,18 +80,19 @@ export function BoqList() {
                   <thead>
                     <tr>
                       <th>BOQ</th><th>Site</th><th className="rt">Lines</th>
-                      <th>Prepared</th><th>Beyond estimate</th><th>Status</th>
+                      <th>Prepared</th><th>Past the estimate</th><th>Status</th>
                       <th style={{ width: 170 }} />
                     </tr>
                   </thead>
                   <tbody>
                     {(data?.boqs || []).map((b) => (
-                      <tr key={b.id} className="click" onClick={() => setOpenId(b.id)}>
-                        <td><b>{b.doc_no}</b><small className="mono">against {b.client_wo_no || b.wo_doc_no}</small></td>
+                      <tr key={b.id} className="click" tabIndex={0} onClick={() => setOpenId(b.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(b.id); }}>
+                        <td><Code as="b">{b.doc_no}</Code><small>Against <Code>{b.client_wo_no || b.wo_doc_no}</Code></small></td>
                         <td>{b.site_name}</td>
                         <td className="rt mono">{b.line_count}</td>
                         <td style={{ minWidth: 130 }}>
-                          <Meter value={b.prepared_count} max={b.wo_line_count} />
+                          <Meter value={b.prepared_count} max={b.wo_line_count} label="Work order lines prepared" />
                           <small style={{ color: 'var(--muted)' }}>
                             {b.prepared_count} of {b.wo_line_count} work order lines
                           </small>
@@ -89,17 +100,10 @@ export function BoqList() {
                         <td>
                           {b.status !== 'LOCKED' ? '—'
                             : b.over_allow
-                              ? <Tag kind="warn">{Number(b.over_pct) ? `${b.over_pct}% over allowed` : 'No ceiling'}</Tag>
-                              : <Tag>Hard stop</Tag>}
+                              ? (Number(b.over_pct) ? `Allowed, up to ${b.over_pct}%` : 'Allowed, no ceiling')
+                              : 'Not allowed (hard stop)'}
                         </td>
-                        <td>
-                          {b.state === 'AMENDMENT_DUE'
-                            ? <Tag kind="bad">▲ Amendment due · {Number(b.worst_over_pct).toFixed(1)}%</Tag>
-                            : b.status === 'LOCKED' ? <Tag kind="ok">Locked</Tag>
-                              : b.status === 'SUBMITTED'
-                                ? <Tag kind="warn">Waiting to be signed</Tag>
-                                : <Tag kind="warn">Draft</Tag>}
-                        </td>
+                        <td><BoqStatus b={b} /></td>
                         <td className="rt" onClick={(e) => e.stopPropagation()}>
                           <button className="btn sm" onClick={() => setHistoryId(b.id)}>History</button>{' '}
                           {b.status === 'LOCKED' && canWrite(`/boq/${b.id}/amendments`) && (
@@ -112,7 +116,7 @@ export function BoqList() {
                     {!(data?.boqs || []).length && (
                       <tr><td colSpan={7}>
                         <Empty title="No BOQ prepared yet">
-                          Load a work order on a site, then prepare it here.
+                          Load a work order on a site under Sites, then prepare its BOQ here.
                         </Empty>
                       </td></tr>
                     )}
@@ -142,8 +146,8 @@ export function BoqList() {
 
      Sl No | Item Code | Description | Unit | Item Qty | BOQ Qty | Est Qty | Make
 
-   A work order line sits on a tinted row with a teal edge; the items
-   it is made of are indented beneath it as 1a, 1b, 1c. BOQ Qty is
+   A work order line sits on a tinted row; the items it is made of are
+   listed beneath it as 1a, 1b, 1c. BOQ Qty is
    calculated and never typed. Est Qty is typed once on the parent and
    the children follow it until one is overridden.
    =================================================================== */
@@ -152,6 +156,7 @@ const round3 = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
 export function BoqSheet({ boqId, onClose }) {
   const id = boqId;
   const toast = useToast();
+  const ask = useDialog();
   const { data, error, loading, reload } = useApi(`/boq/${id}`);
 
   /* Work order lines come onto the sheet one at a time, the way the
@@ -191,7 +196,7 @@ export function BoqSheet({ boqId, onClose }) {
     setEdit(seed);
   }, [data, shown]);
 
-  if (loading) return <Modal full title="BOQ" onClose={onClose}><Loading /></Modal>;
+  if (loading && !data) return <Modal full title="BOQ" onClose={onClose}><Loading what="the BOQ" /></Modal>;
   if (error) {
     return (
       <Modal full title="BOQ" onClose={onClose}>
@@ -200,8 +205,8 @@ export function BoqSheet({ boqId, onClose }) {
     );
   }
 
-  // out for signature is as closed as locked: changing a line under a
-  // signature means the thing that was signed is not the thing you have
+  // with its approvers it is as closed as locked: changing a line under
+  // an approval means the thing approved is not the thing you have
   const locked = data.status === 'LOCKED' || data.status === 'SUBMITTED';
   const onSheet = (shown || []);
   const pending = data.woLines.filter((w) => !onSheet.includes(w.wo_line_id));
@@ -251,9 +256,15 @@ export function BoqSheet({ boqId, onClose }) {
     setEdit((d) => ({ ...d, [next.wo_line_id]: { estQty: String(next.qty), items: [blank()] } }));
   };
 
-  const dropLine = (w) => {
-    if (edit[w.wo_line_id]?.items.some((r) => r.item)
-      && !window.confirm(`Take line ${w.sno} off the sheet? What you typed into it is lost.`)) return;
+  const dropLine = async (w) => {
+    if (edit[w.wo_line_id]?.items.some((r) => r.item)) {
+      const ok = await ask({
+        title: `Take line ${w.sno} off the BOQ?`,
+        consequence: 'The items typed against it are removed. You can add the line back later.',
+        confirm: 'Take it off', tone: 'bad',
+      });
+      if (ok === null) return;
+    }
     setShown((x) => x.filter((v) => v !== w.wo_line_id));
     setEdit((d) => { const n = { ...d }; delete n[w.wo_line_id]; return n; });
     if (w.items.length) api.del(`/boq/${id}/wo-line/${w.wo_line_id}`).then(reload).catch(() => {});
@@ -271,9 +282,7 @@ export function BoqSheet({ boqId, onClose }) {
       });
       setSubmitOpen(false);
       reload();
-      toast(`${r.docNo} locked — ${allow
-        ? (Number(policy.overPct) ? `indents may go ${policy.overPct}% past the estimate` : 'indents may exceed the estimate')
-        : 'the estimate is a hard stop'}`, 'ok');
+      toast(r.message || `${r.docNo} sent for approval — it locks once the GM and Management both approve`, 'ok');
     } catch (e) { toast(e.message, 'bad'); }
   };
 
@@ -284,49 +293,49 @@ export function BoqSheet({ boqId, onClose }) {
       <Modal
         full
         title={locked ? data.docNo : `Prepare ${data.docNo}`}
-        sub={`${data.site.name} · ${data.client || ''} · against ${data.workOrder.clientWoNo || data.workOrder.docNo}`}
+        sub={`${data.site.name} · ${data.client || ''} · against work order ${data.workOrder.clientWoNo || data.workOrder.docNo}`}
         onClose={onClose}
         actions={!locked && canWrite(`/boq/${id}/submit`) && (
-          <button className="btn pri" disabled={!allDone} onClick={() => setSubmitOpen(true)}>
-            Submit BOQ
-          </button>
+          <>
+            {!allDone && <span className="why-not"><Icon name="info" size={14} />Prepare every work order line first</span>}
+            <button className="btn pri" disabled={!allDone} onClick={() => setSubmitOpen(true)}>
+              <Icon name="send" />Send for approval
+            </button>
+          </>
         )}
       >
         <div style={{ padding: '16px 20px' }}>
           <Card>
             <div className="pad stats">
               <Stat n={data.prepared} label="prepared" />
-              <Stat n={data.remaining} label="remaining" tone={data.remaining ? 'warn' : 'ok'} />
-              <Stat n={data.ofLines} label="work order lines" />
+              <Stat n={data.remaining} label="still to prepare" />
+              <Stat n={data.ofLines} label="work order lines" one="work order line" />
               <div style={{ flex: 1, minWidth: 190 }}>
-                <Meter value={data.prepared} max={data.ofLines} />
+                <Meter value={data.prepared} max={data.ofLines} label="Work order lines prepared" />
                 <small style={{ color: 'var(--muted)' }}>
-                  {onSheet.length} on the sheet
+                  {plural(onSheet.length, 'line')} on the BOQ
                   {pending.length ? ` · ${pending.length} not added yet` : ' · all added'}
                 </small>
               </div>
-              {data.state === 'AMENDMENT_DUE'
-                ? <Tag kind="bad">▲ Amendment due · {Number(data.worstOverPct).toFixed(1)}% over</Tag>
-                : locked ? <Tag kind="ok">Locked</Tag>
-                  : <Tag kind={allDone ? 'ok' : 'warn'}>
-                    {allDone ? 'Ready to submit' : 'Submit locked until every line is done'}
-                  </Tag>}
+              {locked
+                ? <BoqStatus b={{ state: data.state, status: data.status, worstOverPct: data.worstOverPct }} />
+                : <Status tone={allDone ? 'done' : 'neutral'} label={allDone ? 'Ready to send for approval' : 'Every line must be prepared first'} />}
             </div>
           </Card>
 
-          <Card title="BOQ (Bill of Quantity)"
-            sub="Item Qty is how many go into one of the work order line — BOQ Qty follows. Est Qty is yours to type.">
+          <Card title="BOQ (bill of quantities)"
+            sub="Item qty is how many go into one unit of the work order line — BOQ qty follows from it. The estimate is yours to type.">
             <div className="tw">
               <table className="sheet">
                 <thead>
                   <tr>
-                    <th style={{ width: 62 }}>Sl No</th>
-                    <th style={{ width: 108 }}>Item Code</th>
+                    <th style={{ width: 62 }}>Sl no</th>
+                    <th style={{ width: 110 }}>Item code</th>
                     <th style={{ minWidth: 300 }}>Description</th>
                     <th style={{ width: 84 }}>Unit</th>
-                    <th className="rt" style={{ width: 88 }}>Item Qty</th>
-                    <th className="rt" style={{ width: 92 }}>BOQ Qty</th>
-                    <th className="rt" style={{ width: 96 }}>Est Qty</th>
+                    <th className="rt" style={{ width: 88 }}>Item qty</th>
+                    <th className="rt" style={{ width: 92 }}>BOQ qty</th>
+                    <th className="rt" style={{ width: 96 }}>Estimate</th>
                     <th style={{ width: 140 }}>Make</th>
                     <th style={{ width: 44 }} />
                   </tr>
@@ -341,7 +350,7 @@ export function BoqSheet({ boqId, onClose }) {
                         <Fragment key={lid}>
                           <tr className="wo-row">
                             <td className="sn"><b>{w.sno}</b></td><td />
-                            <td><b>{w.description}</b><small>work order line</small></td>
+                            <td><b>{w.description}</b><small>Work order line</small></td>
                             <td>{w.uom}</td><td />
                             <td className="rt mono"><b>{qty(w.qty)}</b></td>
                             <td className="rt mono">{qty(w.est_qty)}</td>
@@ -350,19 +359,19 @@ export function BoqSheet({ boqId, onClose }) {
                           {w.items.map((i) => (
                             <tr key={i.boq_line_id} className="kid">
                               <td>{i.sno}</td>
-                              <td className="mono" style={{ color: 'var(--brand-ink)' }}>{i.item_code}</td>
+                              <td><Code>{i.item_code}</Code></td>
                               <td>{i.item_name}</td><td>{i.uom}</td>
                               <td className="rt mono">{qty(i.item_qty)}</td>
                               <td className="rt mono">{qty(i.boq_qty)}</td>
                               <td className="rt mono">
                                 {qty(i.est_qty)}
                                 {Number(i.var_qty) > 0 && (
-                                  <small style={{ color: 'var(--brand)' }}>+{qty(i.var_qty)} variation</small>
+                                  <small>+{qty(i.var_qty)} variation</small>
                                 )}
                               </td>
-                              <td>{i.make_name || <span style={{ color: 'var(--faint)' }}>any</span>}</td>
+                              <td>{i.make_name || <span style={{ color: 'var(--faint)' }}>Any make</span>}</td>
                               <td className="rt">
-                                {Number(i.over_qty) > 0 && <Tag kind="bad">▲ {qty(i.over_qty)} over</Tag>}
+                                {Number(i.over_qty) > 0 && <Status tone="attention" icon="alert" label={`${qty(i.over_qty)} over`} />}
                               </td>
                             </tr>
                           ))}
@@ -379,10 +388,10 @@ export function BoqSheet({ boqId, onClose }) {
                           <td>
                             <b>{w.description}</b>
                             <small>
-                              work order line ·{' '}
+                              Work order line ·{' '}
                               {ready
-                                ? <span style={{ color: 'var(--ok)' }}>{ed.items.filter((r) => r.item).length} item(s)</span>
-                                : <span style={{ color: 'var(--warn)' }}>Needs an item</span>}
+                                ? <span>{plural(ed.items.filter((r) => r.item).length, 'item')}</span>
+                                : <span style={{ color: 'var(--st-attn)', fontWeight: 600 }}>Needs an item</span>}
                               {saving[lid] && <span style={{ color: 'var(--muted)' }}> · saving…</span>}
                             </small>
                           </td>
@@ -390,26 +399,27 @@ export function BoqSheet({ boqId, onClose }) {
                           <td />
                           <td className="rt mono"><b>{qty(w.qty)}</b></td>
                           <td>
-                            <input className="inp rt" type="number" min="0" step="any" value={ed.estQty}
-                              title="entered by hand" onBlur={() => saveLine(w, true)}
+                            <input className="inp rt" type="number" min="0" step="any" value={ed.estQty} inputMode="decimal"
+                              aria-label={`Estimate for work order line ${w.sno}`}
+                              title="Typed by hand; the items below follow it" onBlur={() => saveLine(w, true)}
                               onChange={(e) => patch(lid, (x) => ({ ...x, estQty: e.target.value }))} />
                           </td>
                           <td />
                           <td className="rt">
-                            <button className="btn sm" title="Take this line off the sheet"
-                              onClick={() => dropLine(w)}>✕</button>
+                            <button className="btn sm ghost" aria-label={`Take line ${w.sno} off the BOQ`} title="Take this line off the BOQ"
+                              onClick={() => dropLine(w)}><Icon name="x" size={14} /></button>
                           </td>
                         </tr>
 
                         {ed.items.map((row, j) => (
                           <tr key={`${lid}-${j}`} className="kid">
                             <td>{w.sno}{String.fromCharCode(97 + j)}</td>
-                            <td className="mono" style={{ color: 'var(--brand-ink)' }}>
-                              {row.item?.code || <span style={{ color: 'var(--faint)' }}>—</span>}
+                            <td>
+                              {row.item?.code ? <Code>{row.item.code}</Code> : <span style={{ color: 'var(--faint)' }}>—</span>}
                             </td>
                             <td>
                               <ItemPicker value={row.item}
-                                placeholder="type any part of the code or name"
+                                placeholder="Type any part of the code or name…"
                                 autoFocus={j === ed.items.length - 1 && !row.item}
                                 onPick={(it) => patch(lid, (x) => ({
                                   ...x, items: x.items.map((r, n) => (n === j ? { ...r, item: it, makeId: '' } : r)),
@@ -417,8 +427,9 @@ export function BoqSheet({ boqId, onClose }) {
                             </td>
                             <td>{row.item?.uom || <span style={{ color: 'var(--faint)' }}>—</span>}</td>
                             <td>
-                              <input className="inp rt" type="number" min="0" step="any" value={row.itemQty}
-                                title="how many go into one" onBlur={() => saveLine(w, true)}
+                              <input className="inp rt" type="number" min="0" step="any" value={row.itemQty} inputMode="decimal"
+                                aria-label="Item qty per unit of the work order line"
+                                title="How many go into one unit of the work order line" onBlur={() => saveLine(w, true)}
                                 onChange={(e) => patch(lid, (x) => ({
                                   ...x, items: x.items.map((r, n) => (n === j ? { ...r, itemQty: e.target.value } : r)),
                                 }))} />
@@ -427,7 +438,8 @@ export function BoqSheet({ boqId, onClose }) {
                               {qty(round3((Number(row.itemQty) || 0) * (Number(w.qty) || 0)))}
                             </td>
                             <td>
-                              <input className="inp rt" type="number" min="0" step="any" value={childEst(row, ed)}
+                              <input className="inp rt" type="number" min="0" step="any" value={childEst(row, ed)} inputMode="decimal"
+                                aria-label="Estimate for this item"
                                 onBlur={() => saveLine(w, true)}
                                 onChange={(e) => patch(lid, (x) => ({
                                   ...x,
@@ -436,20 +448,20 @@ export function BoqSheet({ boqId, onClose }) {
                                 }))} />
                             </td>
                             <td>
-                              <select className="inp" value={row.makeId} onBlur={() => saveLine(w, true)}
+                              <select className="inp" value={row.makeId} onBlur={() => saveLine(w, true)} aria-label="Make"
                                 onChange={(e) => patch(lid, (x) => ({
                                   ...x, items: x.items.map((r, n) => (n === j ? { ...r, makeId: e.target.value } : r)),
                                 }))}>
-                                <option value="">— any —</option>
+                                <option value="">Any make</option>
                                 {(row.item?.makes || []).map((m) => <option key={m} value={m}>{m}</option>)}
                               </select>
                             </td>
                             <td className="rt">
-                              <button className="btn sm bad" title="Remove item"
+                              <button className="btn sm ghost" aria-label="Remove this item" title="Remove this item"
                                 onClick={() => patch(lid, (x) => ({
                                   ...x,
                                   items: x.items.length > 1 ? x.items.filter((_, n) => n !== j) : [blank()],
-                                }))}>✕</button>
+                                }))}><Icon name="x" size={14} /></button>
                             </td>
                           </tr>
                         ))}
@@ -459,10 +471,10 @@ export function BoqSheet({ boqId, onClose }) {
                             <button className="btn sm" onClick={() => patch(lid, (x) => ({
                               ...x, items: [...x.items, blank()],
                             }))}>
-                              + Add item to line {w.sno}
+                              <Icon name="plus" size={14} />Add item to line {w.sno}
                             </button>{' '}
-                            <button className="btn sm" onClick={() => setAskStore(w)}>
-                              Item missing? Ask Store
+                            <button className="btn sm ghost" onClick={() => setAskStore(w)}>
+                              Item not in the master? Ask Store
                             </button>
                           </td>
                         </tr>
@@ -477,12 +489,12 @@ export function BoqSheet({ boqId, onClose }) {
               <div className="pad" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderTop: '1px solid var(--line-2)' }}>
                 {pending.length ? (
                   <>
-                    <button className="btn pri" onClick={addNext}>+ Add work order line</button>
-                    <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-                      Next up: <b>{pending[0].description}</b> · {pending.length} line(s) left to add
+                    <button className="btn pri" onClick={addNext}><Icon name="plus" />Add the next work order line</button>
+                    <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+                      Next: <b>{pending[0].description}</b> · {plural(pending.length, 'line')} left to add
                     </span>
                   </>
-                ) : <Tag kind="ok">Every work order line is on the sheet</Tag>}
+                ) : <Status tone="done" label="Every work order line is on the BOQ" />}
               </div>
             )}
           </Card>
@@ -493,8 +505,8 @@ export function BoqSheet({ boqId, onClose }) {
         <Modal title="Item missing from the master"
           sub={`Work order line ${askStore.sno}`} onClose={() => setAskStore(null)}
           footer={<button className="btn pri" onClick={() => setAskStore(null)}>Close</button>}>
-          <Banner kind="info" icon="◆">
-            Items are added to the master by Store, so the same thing cannot enter twice under two
+          <Banner kind="info">
+            Only Store adds items to the item master, so the same thing cannot go in twice under two
             spellings. Send them the description below and they will create it with a code.
           </Banner>
           <Field label="The scope this line covers">
@@ -505,17 +517,17 @@ export function BoqSheet({ boqId, onClose }) {
 
       {submitOpen && (
         <Modal
-          title="Submit the BOQ" sub="One decision before it locks" onClose={() => setSubmitOpen(false)}
+          title="Send the BOQ for approval" sub="One decision first: what happens past the estimate" onClose={() => setSubmitOpen(false)}
           footer={<>
-            <button className="btn" onClick={() => setSubmitOpen(false)}>Cancel</button>
-            <button className="btn pri" onClick={submit}>Lock the BOQ</button>
+            <button className="btn" onClick={() => setSubmitOpen(false)}>Go back</button>
+            <button className="btn pri" onClick={submit}><Icon name="send" />Send for approval</button>
           </>}
         >
-          <Banner kind="info" icon="▤">
-            Once locked, every indent from this site is measured against the <b>estimated quantity</b> on
-            each BOQ line. Decide now what happens when the site needs more than that.
-          </Banner>
-          <Field label="Can the site indent beyond the estimate?">
+          <p className="consequence">
+            It goes to the site's GM, then Management. It locks once both approve — after that,
+            every PRN from this site is measured against the <b>estimate</b> on each BOQ line.
+          </p>
+          <Field label="Can the site ask for more than the estimate on a PRN?">
             <select className="inp" value={policy.overAllow}
               onChange={(e) => setPolicy((p) => ({ ...p, overAllow: e.target.value }))}>
               <option value="NO">No — the estimate is a hard stop</option>
@@ -534,8 +546,8 @@ export function BoqSheet({ boqId, onClose }) {
                   <option value="0">No ceiling — any quantity</option>
                 </select>
               </Field>
-              <Banner kind="warn" icon="!">
-                Anything past the estimate is flagged the moment it is raised, and the BOQ stays at
+              <Banner kind="warn">
+                Anything past the estimate is flagged the moment a PRN asks for it, and the BOQ shows
                 <b> Amendment due</b> until a variation quantity is recorded.
               </Banner>
             </>

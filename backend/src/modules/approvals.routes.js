@@ -7,6 +7,9 @@ const { notFound, conflict, badRequest } = require('../lib/errors');
 const { log } = require('../lib/audit');
 const chain = require('../lib/approvals');
 
+// "1 line", "3 lines": the count is cheap, so SQL simply asks for it twice
+const linesOf = (count) => `${count}, IF(${count} = 1, ' line', ' lines')`;
+
 /**
  * Everything waiting on somebody's decision, in one place.
  *
@@ -58,7 +61,7 @@ const CHAINED = {
            DATE(b.submitted_at) AS raised_on, NULL AS needed_by,
            ac.waiting_since, v.contract_value AS amount,
            CONCAT(wo.doc_no, ' · ',
-                  (SELECT COUNT(*) FROM boq_lines bl WHERE bl.boq_id = b.id), ' line(s)',
+                  ${linesOf('(SELECT COUNT(*) FROM boq_lines bl WHERE bl.boq_id = b.id)')},
                   IF(b.over_allow, CONCAT(' · beyond estimate ',
                      IF(b.over_pct > 0, CONCAT(b.over_pct, '% allowed'), 'allowed, no ceiling')),
                      '')) AS summary,
@@ -80,7 +83,7 @@ const CHAINED = {
            i.branch_id, br.name AS branch_name, ru.name AS raised_by_name,
            i.indent_date AS raised_on, i.needed_by,
            ac.waiting_since, NULL AS amount,
-           CONCAT((SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id), ' line(s)',
+           CONCAT(${linesOf('(SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id)')},
                   IF(i.kind = 'REPLACEMENT', ' · replacing lent stock', '')) AS summary,
            (SELECT COUNT(*) FROM indent_lines il WHERE il.indent_id = i.id AND il.over_qty > 0)
              AS flags,
@@ -117,7 +120,7 @@ const CHAINED = {
            po.branch_id, br.name AS branch_name, ru.name AS raised_by_name,
            po.po_date AS raised_on, po.expected_date AS needed_by,
            ac.waiting_since, v.po_value AS amount,
-           CONCAT(sp.name, ' · ', v.line_count, ' line(s)') AS summary,
+           CONCAT(sp.name, ' · ', ${linesOf('v.line_count')}) AS summary,
            0 AS flags,
            d.gm_user_id AS approver_id, ac.level, ac.levels, ac.level1_by
       FROM approval_chains ac
@@ -232,7 +235,7 @@ const shape = (r) => {
     level,
     levels,
     stage: levels < 2 ? null
-      : level === 1 ? 'First signature' : 'Second signature',
+      : level === 1 ? 'Level 1 of 2' : 'Level 2 of 2',
     signedFirstBy: r.level1_by ? Number(r.level1_by) : null,
   };
 };
@@ -339,7 +342,7 @@ router.get('/decided',
         // that, and somebody else has to as well" do not read alike
         level: Number(r.level), levels: Number(r.levels),
         stage: Number(r.levels) < 2 ? null
-          : Number(r.level) === 1 ? 'First signature' : 'Second signature',
+          : Number(r.level) === 1 ? 'Level 1 of 2' : 'Level 2 of 2',
         amount: r.amount === null || r.amount === undefined ? null : Number(r.amount),
         at: r.created_at,
       })),

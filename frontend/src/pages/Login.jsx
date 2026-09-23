@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { api, setToken } from '../api';
-import { Banner, Field } from '../components/ui';
+import {
+  Banner, Field,
+} from '../components/ui';
 
 /**
  * The front door. An email and a password; what is behind it depends
@@ -42,9 +44,9 @@ export default function Login({ onSignedIn, ended }) {
         <p className="login-sub">Use the email your Management team set up for you.</p>
 
         {ended && !error && (
-          <Banner kind="info" icon="i">Your session ended. Sign in again to carry on.</Banner>
+          <Banner kind="info">Your session ended. Sign in again to carry on.</Banner>
         )}
-        {error && <Banner kind="bad" icon="!">{error}</Banner>}
+        {error && <Banner kind="bad">{error}</Banner>}
 
         <Field label="Email">
           <input className="inp" type="email" autoComplete="username" autoFocus required

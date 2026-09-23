@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, money, dmy, today, addDays, withBranch, canWrite } from '../api';
+import { api, qty, units, money, dmy, today, addDays, withBranch, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast,
+  useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Meter, useToast, Code, Status, DateField,
 } from '../components/ui';
+import { Icon } from '../components/icons';
+import { dcState } from '../vocab';
 import { ReceiveGrn } from './Grns';
 
 /**
  * The central store.
  *
  * One place: the branch's store. It takes material in against purchase
- * orders, holds it, and issues it out to sites against their PRNs. A
- * site's own store is not this — it is in the Site department, keeps no
- * rates, and holds only what the site has signed for.
+ * orders, holds it, and dispatches it to sites against their PRNs. A
+ * site's own stock is not this — it is in the Site department, keeps no
+ * rates, and holds only what the site has received.
  */
 
 /* ===================================================================
@@ -41,52 +43,52 @@ export function StoreDesk() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <Link className="btn" to="/store/prns">PRNs to fulfil</Link>
-            {canWrite('/grns') && <Link className="btn pri" to="/grns">Acknowledge a delivery</Link>}
+            {canWrite('/grns') && <Link className="btn pri" to="/grns">Receive from supplier</Link>}
           </div>
         } />
       <div className="page-body">
         <div className="stats">
-          <Stat n={held.items} label="items on the shelf" />
+          <Stat n={held.items} label="items in stock" one="item in stock" />
           <Stat n={money(held.value)} label="at the last rate paid" tone="brand" />
-          <Stat n={toReceive.length} label="orders coming in" />
+          <Stat n={toReceive.length} label="orders coming in" one="order coming in" />
           <Stat n={qty(inTransit.reduce((t, d) => t + Number(d.in_transit_qty), 0))}
-            label="out, unsigned" tone={inTransit.length ? 'warn' : undefined} />
+            label="units on the road to sites" one="unit on the road to sites" />
         </div>
 
         {stale.length > 0 && (
           <Banner kind="bad" icon="!"
             action={<Link className="btn sm" to="/challans?state=PENDING">Chase them</Link>}>
-            <b>{stale.length} challan{stale.length === 1 ? '' : 's'} out more than three days</b>{' '}
-            with nobody signing. That material is off this store&apos;s books and not yet on any
-            site&apos;s.
+            <b>{plural(stale.length, 'challan')} on the road more than three days</b>{' '}
+            and not yet received. That material has left this store's stock and is not yet in any
+            site's.
           </Banner>
         )}
 
         <div className="grid2">
           <div>
-            <Card title="Coming in" sub="Signed orders directed at this store">
+            <Card title="Coming in" sub="Approved purchase orders being delivered to this store">
               <div className="tw">
                 <table>
                   <thead>
-                    <tr><th>Order</th><th>Supplier</th><th>Expected</th>
-                      <th className="rt">Still owed</th><th /></tr>
+                    <tr><th>PO</th><th>Supplier</th><th>Expected</th>
+                      <th className="rt">Still to receive</th><th /></tr>
                   </thead>
                   <tbody>
                     {toReceive.map((p) => (
                       <tr key={p.po_id}>
                         <td><Link to={`/purchase-orders/${p.po_id}`}>
-                          <b className="mono">{p.doc_no}</b></Link>
+                          <Code as="b">{p.doc_no}</Code></Link>
                           </td>
                         <td>{p.supplier_name}</td>
                         <td>{p.expected_date ? dmy(p.expected_date) : '—'}
                           {Number(p.overdue) > 0 && (
-                            <small style={{ color: 'var(--bad)' }}>{p.overdue}d late</small>)}</td>
+                            <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>{plural(p.overdue, 'day')} late</small>)}</td>
                         <td className="rt mono"><b>{qty(p.pending_qty)}</b>
                           {Number(p.received_qty) > 0 && (
                             <small>{qty(p.received_qty)} already in</small>)}</td>
                         <td className="rt">
                           <button className="btn sm pri" onClick={() => setReceiving(p)}>
-                            Acknowledge
+                            Receive
                           </button>
                         </td>
                       </tr>
@@ -101,35 +103,34 @@ export function StoreDesk() {
               </div>
             </Card>
 
-            <Card title="Out, and nobody has signed"
-              sub="Dispatched from here, not yet acknowledged at the site"
-              actions={<Link className="btn sm" to="/challans">All challans</Link>}>
+            <Card title="On the road"
+              sub="Dispatched from here and not yet received at the site"
+              actions={<Link className="btn sm" to="/challans">All delivery challans</Link>}>
               <div className="tw">
                 <table>
                   <thead>
-                    <tr><th>Challan</th><th>To</th><th>Answering</th>
-                      <th className="rt">Unsigned</th><th className="rt">Days out</th></tr>
+                    <tr><th>Challan</th><th>To</th><th>For PRN</th>
+                      <th className="rt">Not yet received</th><th className="rt">Days out</th></tr>
                   </thead>
                   <tbody>
                     {inTransit.map((d) => (
                       <tr key={d.dc_id}>
                         <td><Link to={`/challans/${d.dc_id}`}>
-                          <b className="mono">{d.doc_no}</b></Link>
+                          <Code as="b">{d.doc_no}</Code></Link>
                           <small>{dmy(d.dc_date)}{d.vehicle_no ? ` · ${d.vehicle_no}` : ''}</small></td>
                         <td>{d.to_name}</td>
                         <td><small className="mono">{d.prns || '—'}</small></td>
-                        <td className="rt mono" style={{ color: 'var(--bad)' }}>
-                          <b>{qty(d.in_transit_qty)}</b></td>
+                        <td className="rt mono"><b>{qty(d.in_transit_qty)}</b></td>
                         <td className="rt mono">
                           {Number(d.days_out) > 3
-                            ? <Tag kind="bad">{d.days_out}</Tag> : Number(d.days_out) || '—'}
+                            ? <Status tone="attention" icon="clock" label={plural(d.days_out, 'day')} /> : Number(d.days_out) || '—'}
                         </td>
                       </tr>
                     ))}
                     {!inTransit.length && (
                       <tr><td colSpan={5}>
-                        <Empty title="Nothing on the road">
-                          Everything this store has sent has been signed for.
+                        <Empty title="Nothing is on the road">
+                          Everything this store dispatched has been received.
                         </Empty>
                       </td></tr>
                     )}
@@ -140,13 +141,13 @@ export function StoreDesk() {
           </div>
 
           <div>
-            <Card title="Sites waiting" sub="PRNs still owed something"
+            <Card title="Sites waiting" sub="PRNs not yet delivered in full"
               actions={<Link className="btn sm" to="/store/prns">Open the list</Link>}>
               <div className="tw">
                 <table>
                   <thead>
                     <tr><th>Site</th><th className="rt">PRNs</th>
-                      <th className="rt">Still owed</th><th /></tr>
+                      <th className="rt">Still to deliver</th><th /></tr>
                   </thead>
                   <tbody>
                     {sitesOwed.map((s) => (
@@ -156,17 +157,16 @@ export function StoreDesk() {
                         <td className="rt mono">{s.prn_count}</td>
                         <td className="rt mono"><b>{qty(s.to_deliver_qty)}</b>
                           {Number(s.in_transit_qty) > 0 && (
-                            <small style={{ color: 'var(--warn)' }}>
-                              {qty(s.in_transit_qty)} on the road</small>)}</td>
+                            <small>{qty(s.in_transit_qty)} on the road</small>)}</td>
                         <td className="rt">
-                          <Link className="btn sm" to={`/store/issue?site=${s.site_id}`}>Issue</Link>
+                          <Link className="btn sm" to={`/store/issue?site=${s.site_id}`}>Dispatch</Link>
                         </td>
                       </tr>
                     ))}
                     {!sitesOwed.length && (
                       <tr><td colSpan={4}>
-                        <Empty title="Nobody is waiting">
-                          Every approved PRN has been fulfilled.
+                        <Empty title="No site is waiting">
+                          Every approved PRN has been delivered in full.
                         </Empty>
                       </td></tr>
                     )}
@@ -175,14 +175,14 @@ export function StoreDesk() {
               </div>
             </Card>
 
-            <Card title="The shelf">
+            <Card title="Stock">
               <div className="pad">
                 <div className="stats">
-                  <Stat n={held.items} label="items" />
-                  <Stat n={qty(held.qty)} label="units" />
+                  <Stat n={held.items} label="items" one="item" />
+                  <Stat n={qty(held.qty)} label="units" one="unit" />
                 </div>
-                <Link className="btn sm" to="/stock">Open the stock</Link>{' '}
-                <Link className="btn sm" to="/movements">Movement</Link>
+                <Link className="btn sm" to="/stock">Open stock</Link>{' '}
+                <Link className="btn sm" to="/movements">Stock movement</Link>
               </div>
             </Card>
           </div>
@@ -231,17 +231,17 @@ export function Prns() {
     (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const issue = () => {
-    if (!chosen.length) return toast('Pick the PRNs to issue against', 'bad');
+    if (!chosen.length) return toast('Tick the PRNs to dispatch against', 'bad');
     if (mixed) {
-      return toast('Those PRNs are for different sites. One challan goes to one site.', 'bad');
+      return toast('Those PRNs are for different sites. One delivery challan goes to one site.', 'bad');
     }
     nav(`/store/issue?prns=${picked.join(',')}${carry}`);
     return undefined;
   };
 
   const grab = () => downloadCsv('prns-to-fulfil', [
-    ['PRN', 'Date', 'Needed by', 'Site', 'Items', 'Asked', 'Ordered', 'At store',
-      'Sent', 'On the road', 'At site', 'Still owed', 'Can send now', 'Stage'],
+    ['PRN', 'Raised', 'Needed by', 'Site', 'Items', 'Asked for', 'Ordered', 'Received at store',
+      'Dispatched', 'On the road', 'Received at site', 'Still to deliver', 'Can send now', 'Stage'],
     ...rows.map((r) => [r.doc_no, dmy(r.indent_date), r.needed_by ? dmy(r.needed_by) : '',
       r.site_name, r.item_count, r.indented_qty, r.ordered_qty, r.received_qty, r.issued_qty,
       r.in_transit_qty, r.at_site_qty, r.to_deliver_qty, r.can_send_qty, r.stage]),
@@ -250,16 +250,19 @@ export function Prns() {
   return (
     <>
       <PageHead title="PRNs to fulfil"
-        sub={data ? `${data.store.name} — a PRN stays here until it is fully fulfilled` : ''}
+        sub={data ? `Approved PRNs ${data.store.name} still has to deliver. A PRN stays here until everything on it is received at site.` : ''}
         actions={
-          <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
+          <>
+            <button className="btn" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>
+            {canWrite('/challans') && !chosen.length && (
+              <span className="why-not"><Icon name="info" size={14} />Tick PRNs of one site to dispatch</span>
+            )}
             {canWrite('/challans') && (
-              <button className="btn pri" onClick={issue} disabled={!chosen.length}>
-                {chosen.length ? `Issue against ${chosen.length}` : 'Issue'}
+              <button className="btn pri" onClick={issue} disabled={!chosen.length || mixed}>
+                <Icon name="truck" />{chosen.length ? `Dispatch ${plural(chosen.length, 'PRN')}` : 'Dispatch'}
               </button>
             )}
-          </div>
+          </>
         } />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
@@ -267,7 +270,7 @@ export function Prns() {
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <Field label="Search">
-              <input className="inp" style={{ width: 210 }} placeholder="PRN or site"
+              <input className="inp" type="search" style={{ width: 210 }} placeholder="PRN number or site…"
                 value={f.q} onChange={(e) => setF((x) => ({ ...x, q: e.target.value }))} />
             </Field>
             <Field label="Site">
@@ -280,8 +283,8 @@ export function Prns() {
             <Field label="Show">
               <select className="inp" style={{ width: 180 }} value={f.show}
                 onChange={(e) => setF((x) => ({ ...x, show: e.target.value }))}>
-                <option value="PENDING">Still owed something</option>
-                <option value="ALL">Fulfilled ones too</option>
+                <option value="PENDING">Not delivered in full</option>
+                <option value="ALL">Include delivered in full</option>
               </select>
             </Field>
             <Field label="Sort by">
@@ -290,52 +293,51 @@ export function Prns() {
                 <option value="needed">Needed soonest</option>
                 <option value="oldest">Oldest raised</option>
                 <option value="site">Site</option>
-                <option value="outstanding">Most outstanding</option>
+                <option value="outstanding">Most still to deliver</option>
               </select>
             </Field>
           </div>
         </Card>
 
         {data && (
-          <div className="stats">
-            <Stat n={data.totals.prns} label="PRNs open" />
-            <Stat n={qty(data.totals.toDeliver)} label="still owed" />
-            <Stat n={qty(data.totals.inTransit)} label="on the road"
-              tone={data.totals.inTransit ? 'warn' : undefined} />
+          <div className="stats" style={{ margin: '16px 0' }}>
+            <Stat n={data.totals.prns} label="PRNs not delivered in full" one="PRN not delivered in full" />
+            <Stat n={qty(data.totals.toDeliver)} label="units still to deliver" one="unit still to deliver" />
+            <Stat n={qty(data.totals.inTransit)} label="units on the road" one="unit on the road" />
             <Stat n={qty(data.totals.canSend)}
-              label={`${data.store.name} can answer now`} tone="brand" />
-            <Stat n={data.totals.late} label="past their date"
+              label={`units ${data.store.name} can send now`} one={`unit ${data.store.name} can send now`} />
+            <Stat n={data.totals.late} label="PRNs past their needed-by date" one="PRN past its needed-by date"
               tone={data.totals.late ? 'bad' : undefined} />
           </div>
         )}
 
         {mixed && (
-          <Banner kind="bad" icon="!">
-            You have picked PRNs for <b>{sitesPicked.length} different sites</b>. A lorry goes to
-            one place — pick PRNs of the same site, or several can ride on one challan.
+          <Banner kind="bad">
+            You ticked PRNs for <b>{sitesPicked.length} different sites</b>. A delivery challan goes to
+            one site — tick PRNs of one site; several of them can go on one challan.
           </Banner>
         )}
         {chosen.length > 0 && !mixed && (
-          <Banner kind="ok" icon="✓"
-            action={<button className="btn sm pri" onClick={issue}>Issue against these</button>}>
-            <b>{chosen.length} PRN{chosen.length === 1 ? '' : 's'} for {chosen[0].site_name}</b>{' '}
-            — {qty(chosen.reduce((t, r) => t + Number(r.to_deliver_qty), 0))} still owed between
-            them. They can travel on one challan.
+          <Banner kind="ok"
+            action={<button className="btn sm pri" onClick={issue}>Dispatch these</button>}>
+            <b>{plural(chosen.length, 'PRN')} for {chosen[0].site_name}</b>{' '}
+            — {qty(chosen.reduce((t, r) => t + Number(r.to_deliver_qty), 0))} units still to deliver between
+            them. They can go on one delivery challan.
           </Banner>
         )}
 
-        {loading ? <Loading /> : (
-          <Card title={`${rows.length} PRN${rows.length === 1 ? '' : 's'}`}>
+        {loading && !data ? <Loading what="PRNs" /> : (
+          <Card title={plural(rows.length, 'PRN')}>
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th style={{ width: 34 }} />
-                    <th>PRN</th><th>Site</th><th>Needed</th>
-                    <th className="rt">Asked</th>
-                    <th style={{ width: 160 }}>Where it has got to</th>
-                    <th className="rt">On the road</th><th className="rt">Still owed</th>
-                    <th className="rt">Can send</th><th />
+                    <th style={{ width: 34 }}><span className="vh">Tick to dispatch</span></th>
+                    <th>PRN</th><th>Site</th><th>Needed by</th>
+                    <th className="rt">Asked for</th>
+                    <th style={{ width: 170 }}>Received at site</th>
+                    <th className="rt">On the road</th><th className="rt">Still to deliver</th>
+                    <th className="rt">In stock to send</th><th />
                   </tr>
                 </thead>
                 <tbody>
@@ -344,41 +346,41 @@ export function Prns() {
                     const clash = on && mixed;
                     return (
                       <tr key={r.indent_id}
-                        style={clash ? { background: 'var(--bad-soft, #fee)' }
+                        style={clash ? { background: 'var(--st-stop-bg)' }
                           : on ? { background: 'var(--brand-soft)' } : undefined}>
-                        <td><input type="checkbox" checked={on}
+                        <td><input type="checkbox" checked={on} aria-label={`Tick ${r.doc_no} to dispatch`}
                           onChange={() => toggle(r.indent_id)} /></td>
                         <td><Link to={`/indents/${r.indent_id}`}>
-                          <b className="mono">{r.doc_no}</b></Link>
-                          <small>{dmy(r.indent_date)} · {r.item_count} item{r.item_count === 1 ? '' : 's'}</small></td>
-                        <td>{r.site_name}<small className="mono">{r.site_code}</small></td>
-                        <td>
+                          <Code as="b">{r.doc_no}</Code></Link>
+                          <small>{dmy(r.indent_date)} · {plural(r.item_count, 'item')}</small></td>
+                        <td>{r.site_name}<small><Code>{r.site_code}</Code></small></td>
+                        <td className="mono">
                           {r.needed_by ? dmy(r.needed_by) : '—'}
                           {Number(r.days_late) > 0 && (
-                            <small style={{ color: 'var(--bad)' }}>{r.days_late}d late</small>)}
+                            <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>{plural(r.days_late, 'day')} late</small>)}
                         </td>
                         <td className="rt mono">{qty(r.indented_qty)}</td>
                         <td>
-                          <Meter value={Number(r.at_site_qty)} max={Number(r.indented_qty)} />
+                          <Meter value={Number(r.at_site_qty)} max={Number(r.indented_qty)} label="Received at site" />
                           <small className="mono">
-                            {qty(r.at_site_qty)} at site · {qty(r.issued_qty)} sent
+                            {qty(r.at_site_qty)} of {qty(r.indented_qty)} · {qty(r.issued_qty)} dispatched
                           </small>
                         </td>
                         <td className="rt mono">
-                          {Number(r.in_transit_qty)
-                            ? <Tag kind="warn">{qty(r.in_transit_qty)}</Tag> : '—'}
+                          {Number(r.in_transit_qty) ? qty(r.in_transit_qty) : '—'}
                         </td>
                         <td className="rt mono"><b>{qty(r.to_deliver_qty)}</b></td>
                         <td className="rt mono"
-                          style={{ color: Number(r.can_send_qty) > 0 ? 'var(--ok)' : 'var(--faint)' }}>
-                          {Number(r.can_send_qty) ? qty(r.can_send_qty) : 'nothing held'}
+                          style={{ color: Number(r.can_send_qty) > 0 ? undefined : 'var(--faint)' }}>
+                          {Number(r.can_send_qty) ? <b>{qty(r.can_send_qty)}</b> : 'None in stock'}
                         </td>
                         <td className="rt" style={{ whiteSpace: 'nowrap' }}>
-                          <Link className="btn sm" to={`/store/issue?prns=${r.indent_id}${carry}`}>Issue</Link>
+                          <Link className="btn sm" to={`/store/issue?prns=${r.indent_id}${carry}`}>Dispatch</Link>
                           {/* the store has not got it, but another site may have */}
                           {Number(r.to_deliver_qty) > 0 && (
                             <Link className="btn sm" style={{ marginLeft: 6 }}
-                              to={`/store/source?prn=${r.indent_id}${carry}`}>From a site</Link>
+                              to={`/store/source?prn=${r.indent_id}${carry}`}
+                              title="The store is short: ask a site that holds it to send it across">Ask another site</Link>
                           )}
                         </td>
                       </tr>
@@ -386,8 +388,8 @@ export function Prns() {
                   })}
                   {!rows.length && (
                     <tr><td colSpan={10}>
-                      <Empty title="Nothing is waiting on this store">
-                        Every approved PRN has been fulfilled.
+                      <Empty icon="check" title="No PRN is waiting for this store">
+                        Every approved PRN has been delivered in full.
                       </Empty>
                     </td></tr>
                   )}
@@ -402,7 +404,7 @@ export function Prns() {
 }
 
 /* ===================================================================
-   The issue sheet: several PRNs of one site onto one challan.
+   The dispatch sheet: several PRNs of one site onto one challan.
    =================================================================== */
 export function IssueSheet() {
   const { branchId, storeId: standing, stores } = useApp();
@@ -453,20 +455,20 @@ export function IssueSheet() {
   const total = lines.reduce((t, l) => t + Number(send[key(l)]), 0);
   const value = lines.reduce((t, l) => t + Number(send[key(l)]) * l.rate, 0);
 
-  if (loading) return <Loading />;
+  if (loading) return <Loading what="the dispatch sheet" />;
   if (error) {
     return (
-      <div className="page-body">
+      <div className="page-body" style={{ paddingTop: 24 }}>
         <ErrorNote error={error} />
-        <Link className="btn" to="/store/prns">Back to the PRNs</Link>
+        <Link className="btn" to="/store/prns">Back to PRNs to fulfil</Link>
       </div>
     );
   }
   if (!data) return <Loading />;
 
   const save = async (dispatch) => {
-    if (!lines.length) return toast('Enter what is going on the lorry', 'bad');
-    if (over.length) return toast('More is being sent than the shelf holds', 'bad');
+    if (!lines.length) return toast('Type what goes on the lorry', 'bad');
+    if (over.length) return toast('More than the store holds is being sent', 'bad');
     setBusy(true);
     try {
       const r = await api.post('/challans', {
@@ -481,7 +483,7 @@ export function IssueSheet() {
         })),
       });
       toast(dispatch
-        ? `${r.docNo} on the road — ${data.site.name} signs for it when it lands`
+        ? `${r.docNo} dispatched — ${data.site.name} confirms receipt when it arrives`
         : `${r.docNo} saved as a draft`, 'ok');
       nav(`/challans/${r.id}`);
     } catch (e) { toast(e.message, 'bad'); }
@@ -513,31 +515,31 @@ export function IssueSheet() {
 
   return (
     <>
-      <PageHead title={`Issue to ${data.site.name}`}
-        sub={`From ${data.store.name} · against ${data.prns.length} PRN${data.prns.length === 1 ? '' : 's'}`}
-        actions={<button className="btn" onClick={() => nav('/store/prns')}>Back</button>} />
+      <PageHead title={`Dispatch to ${data.site.name}`}
+        sub={`A delivery challan from ${data.store.name} for ${plural(data.prns.length, 'PRN')}`}
+        actions={<button className="btn" onClick={() => nav('/store/prns')}><Icon name="arrowLeft" size={14} />PRNs to fulfil</button>} />
       <div className="page-body">
-        <Card title="Answering">
+        <Card title="PRNs on this challan">
           <div className="pad" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {data.prns.map((p) => (
               <Link key={p.indent_id} className="chip" to={`/indents/${p.indent_id}`}>
-                <b className="mono">{p.doc_no}</b>
-                <small>{p.needed_by ? `needed ${dmy(p.needed_by)}` : 'no date'} · {qty(p.to_deliver_qty)} owed</small>
+                <Code as="b">{p.doc_no}</Code>
+                <small>{p.needed_by ? `needed by ${dmy(p.needed_by)}` : 'no needed-by date'} · {qty(p.to_deliver_qty)} still to deliver</small>
               </Link>
             ))}
           </div>
         </Card>
 
-        <Banner kind="info" icon="⇄">
-          Several PRNs may ask for the same item. Each keeps its own row here — what is being
-          answered matters — but they draw on <b>one shelf</b>, shown once per item. What you
-          dispatch leaves this store at once and becomes {data.site.name}&apos;s only when they
-          sign for it.
+        <Banner kind="info">
+          Several PRNs may ask for the same item. Each keeps its own row — which PRN is being
+          answered matters — but they draw on <b>one stock</b>, shown once per item. What you
+          dispatch leaves this store at once, and becomes {data.site.name}&apos;s stock only when they
+          confirm receipt.
         </Banner>
 
         {over.length > 0 && (
-          <Banner kind="bad" icon="!">
-            <b>More is being sent than the shelf holds:</b>{' '}
+          <Banner kind="bad">
+            <b>More than the store holds is being sent:</b>{' '}
             {over.map(([, v]) => `${v.code} — sending ${qty(v.sending)} of ${qty(v.held)}`).join('; ')}.
           </Banner>
         )}
@@ -545,8 +547,8 @@ export function IssueSheet() {
         <Card>
           <div className="pad">
             <div className="row2">
-              <Field label="Issue from"
-                hint={`${qty(shelfTotal)} units across ${shelfItems} of these items`}>
+              <Field label="Dispatch from"
+                hint={`${units(shelfTotal)} in stock across ${shelfItems} of these items`}>
                 <select className="inp" value={String(data.store.id)}
                   onChange={(e) => pickStore(e.target.value)}>
                   {(stores || []).map((st) => (
@@ -557,22 +559,20 @@ export function IssueSheet() {
                   )}
                 </select>
               </Field>
-              <Field label="To">
+              <Field label="To site">
                 <input className="inp" disabled value={data.site.name} />
               </Field>
             </div>
             <div className="row2">
-              <Field label="Date">
-                <input className="inp" type="date" value={head.dcDate}
-                  onChange={(e) => setHead((h) => ({ ...h, dcDate: e.target.value }))} />
-              </Field>
-              <Field label="Vehicle">
-                <input className="inp" value={head.vehicleNo} placeholder="TS09 AB 1234"
+              <DateField label="Dispatch date" value={head.dcDate}
+                onChange={(e) => setHead((h) => ({ ...h, dcDate: e.target.value }))} />
+              <Field label="Vehicle number">
+                <input className="inp code" value={head.vehicleNo} placeholder="e.g. TS09 AB 1234" spellCheck={false} autoComplete="off"
                   onChange={(e) => setHead((h) => ({ ...h, vehicleNo: e.target.value }))} />
               </Field>
             </div>
             <div className="row2">
-              <Field label="Driver">
+              <Field label="Driver's name">
                 <input className="inp" value={head.driver}
                   onChange={(e) => setHead((h) => ({ ...h, driver: e.target.value }))} />
               </Field>
@@ -585,10 +585,11 @@ export function IssueSheet() {
         </Card>
 
         <Card title="What to send"
-          sub={`Each row is one PRN's requirement, drawn from ${data.store.name}`}
+          sub={`Each row is one PRN's requirement, sent from ${data.store.name}'s stock`}
           actions={
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn sm" onClick={fillAll}>Fill from the shelf</button>
+              <button className="btn sm" onClick={fillAll}
+                title="Fill every row from stock, soonest-needed PRN first">Fill from stock</button>
               <button className="btn sm" onClick={() => setSend({})}>Clear</button>
             </div>
           }>
@@ -596,13 +597,13 @@ export function IssueSheet() {
             <table className="sheet">
               <thead>
                 <tr>
-                  <th style={{ width: 100 }}>Code</th><th style={{ minWidth: 190 }}>Item</th>
+                  <th style={{ width: 110 }}>Item code</th><th style={{ minWidth: 190 }}>Item</th>
                   <th style={{ width: 56 }}>Unit</th>
-                  <th className="rt" style={{ width: 108 }}>In store</th>
-                  <th style={{ width: 138 }}>Answering</th>
-                  <th className="rt" style={{ width: 90 }}>Still owed</th>
-                  <th className="rt" style={{ width: 88 }}>On the road</th>
-                  <th className="rt" style={{ width: 94 }}>Sending</th>
+                  <th className="rt" style={{ width: 108 }}>In stock</th>
+                  <th style={{ width: 150 }}>For PRN</th>
+                  <th className="rt" style={{ width: 100 }}>Still to deliver</th>
+                  <th className="rt" style={{ width: 92 }}>On the road</th>
+                  <th className="rt" style={{ width: 100 }}>Send now</th>
                 </tr>
               </thead>
               <tbody>
@@ -616,14 +617,13 @@ export function IssueSheet() {
                           style={Number(send[key(l)]) > 0 ? { background: 'var(--brand-soft)' } : undefined}>
                           {i === 0 && (
                             <>
-                              <td rowSpan={g.rows.length} className="mono"
-                                style={{ color: 'var(--brand-ink)', verticalAlign: 'top' }}>
-                                {g.code}
+                              <td rowSpan={g.rows.length} style={{ verticalAlign: 'top' }}>
+                                <Code>{g.code}</Code>
                               </td>
                               <td rowSpan={g.rows.length} style={{ verticalAlign: 'top' }}>
                                 <b>{l.itemName}</b>
                                 {g.rows.length > 1 && (
-                                  <small>{g.rows.length} PRNs want this — one shelf between them</small>
+                                  <small>{g.rows.length} PRNs want this — one stock between them</small>
                                 )}
                               </td>
                               <td rowSpan={g.rows.length} style={{ verticalAlign: 'top' }}>{g.uom}</td>
@@ -633,7 +633,7 @@ export function IssueSheet() {
                                   {qty(g.held)}
                                 </b>
                                 {p.sending > 0 && (
-                                  <small style={{ color: short ? 'var(--bad)' : 'var(--muted)' }}>
+                                  <small style={{ color: short ? 'var(--st-stop)' : 'var(--muted)', fontWeight: short ? 600 : 400 }}>
                                     {short
                                       ? `${qty(p.sending - g.held)} short`
                                       : `${qty(g.held - p.sending)} left after this`}
@@ -642,14 +642,14 @@ export function IssueSheet() {
                               </td>
                             </>
                           )}
-                          <td><Link to={`/indents/${l.indentId}`} className="mono">{l.prnNo}</Link>
-                            {l.neededBy && <small>needed {dmy(l.neededBy)}</small>}</td>
+                          <td><Link to={`/indents/${l.indentId}`} className="linkish"><Code>{l.prnNo}</Code></Link>
+                            {l.neededBy && <small>needed by {dmy(l.neededBy)}</small>}</td>
                           <td className="rt mono"><b>{qty(l.toDeliverQty)}</b></td>
                           <td className="rt mono">
-                            {l.inTransitQty ? <Tag kind="warn">{qty(l.inTransitQty)}</Tag> : '—'}
+                            {l.inTransitQty ? qty(l.inTransitQty) : '—'}
                           </td>
-                          <td><input className="inp rt" type="number" min="0" step="any"
-                            placeholder="—" value={send[key(l)] ?? ''}
+                          <td><input className="inp rt" type="number" min="0" step="any" inputMode="decimal"
+                            placeholder="0" value={send[key(l)] ?? ''} aria-label={`Quantity to send for ${l.prnNo}`}
                             onChange={(e) => setSend((x) => ({ ...x, [key(l)]: e.target.value }))} /></td>
                         </tr>
                       ))}
@@ -658,8 +658,8 @@ export function IssueSheet() {
                 })}
                 {!data.lines.length && (
                   <tr><td colSpan={8}>
-                    <Empty title="Nothing outstanding on those PRNs">
-                      Everything they asked for has reached the site.
+                    <Empty title="Nothing is still to deliver on those PRNs">
+                      Everything they asked for has been received at the site.
                     </Empty>
                   </td></tr>
                 )}
@@ -670,13 +670,14 @@ export function IssueSheet() {
 
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Stat n={lines.length} label="rows" />
-            <Stat n={qty(total)} label="units going" />
+            <Stat n={lines.length} label="rows" one="row" />
+            <Stat n={qty(total)} label="units going on the lorry" one="unit going on the lorry" />
             <div style={{ flex: 1 }} />
-            <button className="btn" disabled={busy || over.length > 0}
-              onClick={() => save(false)}>Save draft</button>
-            <button className="btn pri" disabled={busy || over.length > 0}
-              onClick={() => save(true)}>Dispatch</button>
+            {!lines.length && <span className="why-not"><Icon name="info" size={14} />Type a quantity to send, or use Fill from stock</span>}
+            <button className="btn" disabled={busy || over.length > 0 || !lines.length}
+              onClick={() => save(false)}>Save as draft</button>
+            <button className="btn pri" disabled={busy || over.length > 0 || !lines.length}
+              onClick={() => save(true)}><Icon name="truck" />Dispatch challan</button>
           </div>
         </Card>
       </div>
@@ -685,7 +686,7 @@ export function IssueSheet() {
 }
 
 /* ===================================================================
-   The shelf.
+   The central store's stock.
    =================================================================== */
 export function Stock() {
   const { branchId, storeId } = useApp();
@@ -702,24 +703,24 @@ export function Stock() {
   const rows = data?.rows || [];
 
   const grab = () => downloadCsv('store-stock', [
-    ['Code', 'Item', 'Unit', 'On the shelf', 'Latest rate', 'Value', 'Out in transit',
-      'Sites asking for', 'Last moved'],
+    ['Item code', 'Item', 'Unit', 'In stock', 'Latest rate', 'Value', 'On the road to sites',
+      'Sites still need', 'Last moved'],
     ...rows.map((r) => [r.item_code, r.item_name, r.uom, r.qty, r.latest_rate, r.value,
       r.out_in_transit, r.demand_qty, r.last_moved ? dmy(r.last_moved) : '']),
   ]);
 
   return (
     <>
-      <PageHead title="Stock" sub={data ? `${data.store.name} — valued at the last rate paid` : ''}
-        actions={<button className="btn" onClick={grab} disabled={!rows.length}>Download</button>} />
+      <PageHead title="Stock" sub={data ? `What ${data.store.name} holds now, valued at the last rate paid` : ''}
+        actions={<button className="btn" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
         <Card>
           <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <Field label="Find an item" hint="By name or code">
-              <input className="inp" style={{ width: 280 }} autoFocus value={f.q}
-                placeholder="e.g. cable, switch, FLC-0187"
+              <input className="inp" type="search" style={{ width: 280 }} value={f.q} spellCheck={false}
+                placeholder="e.g. cable, switch, FLC-0187…"
                 onChange={(e) => setF((x) => ({ ...x, q: e.target.value }))} />
             </Field>
             <Field label="Sort by">
@@ -734,30 +735,30 @@ export function Stock() {
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 8 }}>
               <input type="checkbox" checked={f.hideEmpty}
                 onChange={(e) => setF((x) => ({ ...x, hideEmpty: e.target.checked }))} />
-              Hide nil balances
+              Hide items with nothing left
             </label>
           </div>
         </Card>
 
         {data && (
-          <div className="stats">
-            <Stat n={data.totals.items} label="items held" />
-            <Stat n={qty(data.totals.qty)} label="units" />
-            <Stat n={money(data.totals.value)} label="at the last rate paid" tone="brand" />
-            <Stat n={data.totals.short} label="short of what sites want"
+          <div className="stats" style={{ margin: '16px 0' }}>
+            <Stat n={data.totals.items} label="items in stock" one="item in stock" />
+            <Stat n={qty(data.totals.qty)} label="units" one="unit" />
+            <Stat n={money(data.totals.value)} label="value at the last rate paid" />
+            <Stat n={data.totals.short} label="items short of what sites need" one="item short of what sites need"
               tone={data.totals.short ? 'bad' : undefined} />
           </div>
         )}
 
-        {loading ? <Loading /> : (
-          <Card title={`${rows.length} item${rows.length === 1 ? '' : 's'}`}>
+        {loading && !data ? <Loading what="stock" /> : (
+          <Card title={plural(rows.length, 'item')} sub="Select an item to see every movement">
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
-                    <th className="rt">On the shelf</th><th className="rt">Out in transit</th>
-                    <th className="rt">Sites want</th>
+                    <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
+                    <th className="rt">In stock</th><th className="rt">On the road to sites</th>
+                    <th className="rt">Sites still need</th>
                     <th>Last moved</th>
                   </tr>
                 </thead>
@@ -765,29 +766,29 @@ export function Stock() {
                   {rows.map((r) => {
                     const short = Number(r.demand_qty) > Number(r.qty);
                     return (
-                      <tr key={r.item_id} style={{ cursor: 'pointer' }}
-                        onClick={() => setOpen(r.item_id)}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.item_code}</td>
+                      <tr key={r.item_id} className="click" tabIndex={0}
+                        onClick={() => setOpen(r.item_id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setOpen(r.item_id); }}>
+                        <td><Code>{r.item_code}</Code></td>
                         <td><b>{r.item_name}</b></td>
                         <td>{r.uom}</td>
                         <td className="rt mono"><b>{qty(r.qty)}</b></td>
                         <td className="rt mono">
-                          {Number(r.out_in_transit)
-                            ? <Tag kind="warn">{qty(r.out_in_transit)}</Tag> : '—'}
+                          {Number(r.out_in_transit) ? qty(r.out_in_transit) : '—'}
                         </td>
-                        <td className="rt mono" style={{ color: short ? 'var(--bad)' : undefined }}>
+                        <td className="rt mono">
                           {Number(r.demand_qty) ? qty(r.demand_qty) : '—'}
-                          {short && <small style={{ color: 'var(--bad)' }}>
-                            short {qty(Number(r.demand_qty) - Number(r.qty))}</small>}
+                          {short && <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>
+                            short by {qty(Number(r.demand_qty) - Number(r.qty))}</small>}
                         </td>
-                        <td>{r.last_moved ? dmy(r.last_moved) : '—'}</td>
+                        <td className="mono">{r.last_moved ? dmy(r.last_moved) : '—'}</td>
                       </tr>
                     );
                   })}
                   {!rows.length && (
                     <tr><td colSpan={7}>
-                      <Empty title={f.q ? `Nothing on the shelf matches "${f.q}"` : 'The shelf is empty'}>
-                        Stock arrives by acknowledging a purchase order.
+                      <Empty title={f.q ? `No item in stock matches “${f.q}”` : 'This store holds nothing yet'}>
+                        {f.q ? 'Try fewer words, or part of the code.' : 'Stock arrives when a supplier\'s delivery is received (GRN).'}
                       </Empty>
                     </td></tr>
                   )}
@@ -810,7 +811,7 @@ function ItemCard({ itemId, onClose }) {
   const { data, loading } = useApi(
     `/store/stock/${itemId}?branchId=${branchId}${storeId ? `&storeId=${storeId}` : ''}`,
     [itemId, branchId, storeId]);
-  if (loading || !data) return <Modal title="Item" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="Item" onClose={onClose}><Loading what="the item" /></Modal>;
   if (peek) return <DocPeek doc={peek} onClose={() => setPeek(null)} />;
 
   return (
@@ -818,29 +819,27 @@ function ItemCard({ itemId, onClose }) {
       onClose={onClose}
       footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="stats">
-        <Stat n={qty(data.balance?.qty || 0)} label={`${data.item.uom} on the shelf`} />
+        <Stat n={`${qty(data.balance?.qty || 0)} ${data.item.uom}`} label="in stock now" />
       </div>
       <div className="tw" style={{ maxHeight: 420, overflowY: 'auto' }}>
         <table>
           <thead>
-            <tr><th>Date</th><th>Document</th><th>Why</th>
+            <tr><th>Date</th><th>Document</th><th>What happened</th>
               <th className="rt">In</th><th className="rt">Out</th></tr>
           </thead>
           <tbody>
             {data.moves.map((m) => (
               <tr key={m.id}>
-                <td>{dmy(m.moved_on)}</td>
+                <td className="mono">{dmy(m.moved_on)}</td>
                 <td><DocLink refType={m.ref_type} refId={m.ref_id} refNo={m.ref_no}
                   onPeek={setPeek} /></td>
                 <td>{KIND[m.kind] || m.kind}</td>
-                <td className="rt mono" style={{ color: 'var(--ok)' }}>
-                  {Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
-                <td className="rt mono" style={{ color: 'var(--bad)' }}>
-                  {Number(m.qty) < 0 ? qty(Math.abs(m.qty)) : ''}</td>
+                <td className="rt mono">{Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
+                <td className="rt mono">{Number(m.qty) < 0 ? `−${qty(Math.abs(m.qty))}` : ''}</td>
               </tr>
             ))}
             {!data.moves.length && (
-              <tr><td colSpan={5}><Empty title="Never moved" /></td></tr>
+              <tr><td colSpan={5}><Empty title="This item has never moved here" /></td></tr>
             )}
           </tbody>
         </table>
@@ -853,11 +852,12 @@ function ItemCard({ itemId, onClose }) {
    Movement, read as documents.
    =================================================================== */
 const KIND = {
-  GRN: 'Taken in on an order',
-  DC_OUT: 'Sent to a site',
-  DC_IN: 'Signed for at a site',
-  ADJUST: 'Adjustment',
-  RETURN: 'Returned',
+  GRN: 'Received from supplier (GRN)',
+  DC_OUT: 'Dispatched on a delivery challan',
+  DC_IN: 'Received off a delivery challan',
+  ADJUST: 'Stock adjustment',
+  RETURN: 'Taken back from a worker',
+  ISSUE: 'Issued to a worker',
 };
 
 /**
@@ -871,27 +871,19 @@ export const DocLink = ({ refType, refId, refNo, onPeek }) => {
   if (!refNo) return <span style={{ color: 'var(--faint)' }}>—</span>;
   const to = refType === 'DC' ? `/challans/${refId}`
     : refType === 'GRN' ? `/grns/${refId}` : null;
-  if (!to) return <span className="mono">{refNo}</span>;
+  if (!to) return <Code>{refNo}</Code>;
   // where a screen can open the document in place, it does; otherwise
   // the number stays an ordinary link rather than a dead button
   return onPeek
     ? (
-      <button type="button" className="linkish mono"
+      <button type="button" className="linkish"
         onClick={(e) => { e.stopPropagation(); onPeek({ refType, refId }); }}>
-        {refNo}
+        <Code>{refNo}</Code>
       </button>
     )
-    : <Link to={to} className="mono">{refNo}</Link>;
+    : <Link to={to} className="linkish"><Code>{refNo}</Code></Link>;
 };
 
-const DOC_STATE = {
-  ACKNOWLEDGED: { label: 'Received in full', kind: 'ok' },
-  PART_ACK: { label: 'Part received', kind: 'warn' },
-  IN_TRANSIT: { label: 'On the road', kind: 'warn' },
-  DRAFT: { label: 'Draft', kind: '' },
-  CANCELLED: { label: 'Cancelled', kind: '' },
-  IN_STOCK: { label: 'In stock', kind: 'ok' },
-};
 
 /** What was in it, without leaving the screen that named it. */
 export function DocPeek({ doc, onClose }) {
@@ -901,11 +893,11 @@ export function DocPeek({ doc, onClose }) {
   if (loading || !data) {
     return (
       <Modal wide title="Document" onClose={onClose}>
-        {error ? <ErrorNote error={error} /> : <Loading />}
+        {error ? <ErrorNote error={error} /> : <Loading what="the document" />}
       </Modal>
     );
   }
-  const st = DOC_STATE[data.state] || { label: data.state, kind: '' };
+  const st = dcState(data.state);
   const isDc = data.refType === 'DC';
 
   return (
@@ -913,36 +905,35 @@ export function DocPeek({ doc, onClose }) {
       onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>Close</button>
-        <Link className="btn pri" to={data.href}>Open it in full</Link>
+        <Link className="btn pri" to={data.href}>Open the full document</Link>
       </>}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12,
         flexWrap: 'wrap' }}>
-        <Tag kind={st.kind}>{st.label}</Tag>
+        <Status is={st} />
         <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>
           {data.from} → {data.to}
           {data.vehicle ? ` · ${data.vehicle}` : ''}
-          {data.supplierDc ? ` · their DC ${data.supplierDc}` : ''}
+          {data.supplierDc ? ` · supplier's DC ${data.supplierDc}` : ''}
           {data.by ? ` · ${data.by}` : ''}
         </span>
       </div>
 
       {isDc && data.prns?.length > 0 && (
         <p style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 0 }}>
-          Answering <b className="mono">{data.prns.join(', ')}</b>
+          For <Code as="b">{data.prns.join(', ')}</Code>
         </p>
       )}
       {!isDc && data.po && (
         <p style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 0 }}>
-          Against <Link className="mono" to={`/purchase-orders/${data.po.id}`}>{data.po.docNo}</Link>
+          Against <Link className="linkish" to={`/purchase-orders/${data.po.id}`}><Code>{data.po.docNo}</Code></Link>
         </p>
       )}
 
       <div className="stats">
-        <Stat n={data.totals.lines} label="items" />
-        <Stat n={qty(data.totals.qty)} label={isDc ? 'units sent' : 'units taken in'} />
+        <Stat n={data.totals.lines} label="items" one="item" />
+        <Stat n={qty(data.totals.qty)} label={isDc ? 'units dispatched' : 'units received'} one={isDc ? 'unit dispatched' : 'unit received'} />
         {isDc
-          ? <Stat n={qty(data.totals.inTransit)} label="still unaccounted for"
-              tone={Number(data.totals.inTransit) ? 'bad' : 'ok'} />
+          ? <Stat n={qty(data.totals.inTransit)} label="units not yet received at site" one="unit not yet received at site" />
           : null}
       </div>
 
@@ -950,26 +941,25 @@ export function DocPeek({ doc, onClose }) {
         <table className="sheet">
           <thead>
             <tr>
-              <th style={{ width: 100 }}>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
-              <th className="rt">{isDc ? 'Sent' : 'Taken in'}</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
+              <th className="rt">{isDc ? 'Dispatched' : 'Received'}</th>
               {isDc
-                ? <><th className="rt">Signed for</th><th className="rt">In transit</th></>
+                ? <><th className="rt">Received at site</th><th className="rt">On the road</th></>
                 : <th className="rt">Ordered</th>}
             </tr>
           </thead>
           <tbody>
             {data.lines.map((l, i) => (
               <tr key={i}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.item_code}</td>
+                <td><Code>{l.item_code}</Code></td>
                 <td>{l.item_name}{l.make_name && <small>{l.make_name}</small>}</td>
                 <td>{l.uom}</td>
                 <td className="rt mono"><b>{qty(l.qty)}</b></td>
                 {isDc ? (
                   <>
                     <td className="rt mono">{Number(l.acked_qty) ? qty(l.acked_qty) : '—'}</td>
-                    <td className="rt mono"
-                      style={{ color: Number(l.in_transit_qty) > 0 ? 'var(--bad)' : 'var(--ok)' }}>
-                      {Number(l.in_transit_qty) ? qty(l.in_transit_qty) : 'nil'}
+                    <td className="rt mono">
+                      {Number(l.in_transit_qty) ? qty(l.in_transit_qty) : '—'}
                     </td>
                   </>
                 ) : (
@@ -1007,7 +997,7 @@ export function Movements() {
   const d = today();
 
   const grab = () => downloadCsv('stock-movement', [
-    ['Date', 'Document', 'Why', 'Code', 'Item', 'Unit', 'In', 'Out', 'Rate', 'Value', 'By'],
+    ['Date', 'Document', 'What happened', 'Item code', 'Item', 'Unit', 'In', 'Out', 'Rate', 'Value', 'By'],
     ...rows.map((r) => [dmy(r.moved_on), r.ref_no || '', KIND[r.kind] || r.kind,
       r.item_code, r.item_name, r.uom,
       Number(r.qty) > 0 ? r.qty : '', Number(r.qty) < 0 ? Math.abs(r.qty) : '',
@@ -1017,8 +1007,8 @@ export function Movements() {
   return (
     <>
       <PageHead title="Stock movement"
-        sub="Every GRN and challan that touched this store"
-        actions={<button className="btn" onClick={grab} disabled={!rows.length}>Download</button>} />
+        sub="Every GRN and delivery challan that moved stock in or out of this store"
+        actions={<button className="btn" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
@@ -1040,12 +1030,12 @@ export function Movements() {
               <button className="btn sm" onClick={() => range(addDays(d, -6), d)}>Last 7 days</button>
               <button className="btn sm" onClick={() => range('', '')}>All time</button>
             </div>
-            <Field label="Why">
-              <select className="inp" style={{ width: 185 }} value={f.kind}
+            <Field label="What happened">
+              <select className="inp" style={{ width: 240 }} value={f.kind}
                 onChange={(e) => setF((x) => ({ ...x, kind: e.target.value }))}>
                 <option value="">Everything</option>
-                <option value="GRN">Taken in on an order</option>
-                <option value="DC_OUT">Sent to a site</option>
+                <option value="GRN">Received from supplier (GRN)</option>
+                <option value="DC_OUT">Dispatched on a delivery challan</option>
               </select>
             </Field>
             <Field label="Direction">
@@ -1057,50 +1047,50 @@ export function Movements() {
               </select>
             </Field>
             <Field label="Search">
-              <input className="inp" style={{ width: 190 }} placeholder="Item or document"
+              <input className="inp" type="search" style={{ width: 190 }} placeholder="Item or document…"
                 value={f.q} onChange={(e) => setF((x) => ({ ...x, q: e.target.value }))} />
             </Field>
           </div>
         </Card>
 
         {data && (
-          <div className="stats">
-            <Stat n={data.totals.docs} label="documents" />
-            <Stat n={data.totals.moves} label="lines" />
-            <Stat n={qty(data.totals.inQty)} label="units in" tone="ok" />
-            <Stat n={qty(data.totals.outQty)} label="units out" tone="bad" />
+          <div className="stats" style={{ margin: '16px 0' }}>
+            <Stat n={data.totals.docs} label="documents" one="document" />
+            <Stat n={data.totals.moves} label="lines" one="line" />
+            <Stat n={qty(data.totals.inQty)} label="units in" one="unit in" />
+            <Stat n={qty(data.totals.outQty)} label="units out" one="unit out" />
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-          <button className={`btn sm ${view === 'docs' ? 'pri' : ''}`} onClick={() => setView('docs')}>
+        <div className="seg" role="group" aria-label="Show movement" style={{ marginBottom: 14 }}>
+          <button type="button" aria-pressed={view === 'docs'} className={view === 'docs' ? 'on' : ''} onClick={() => setView('docs')}>
             By document
           </button>
-          <button className={`btn sm ${view === 'lines' ? 'pri' : ''}`} onClick={() => setView('lines')}>
+          <button type="button" aria-pressed={view === 'lines'} className={view === 'lines' ? 'on' : ''} onClick={() => setView('lines')}>
             Every line
           </button>
         </div>
 
-        {loading ? <Loading /> : view === 'docs' ? (
-          <Card title={`${docs.length} document${docs.length === 1 ? '' : 's'}`}
-            sub="Click one to see the items inside it">
+        {loading && !data ? <Loading what="stock movement" /> : view === 'docs' ? (
+          <Card title={plural(docs.length, 'document')}
+            sub="Select one to see the items on it">
             <div className="tw">
               <table>
                 <thead>
-                  <tr><th>Document</th><th>Date</th><th>Why</th><th className="rt">Items</th>
+                  <tr><th>Document</th><th>Date</th><th>What happened</th><th className="rt">Items</th>
                     <th className="rt">Units</th><th>By</th></tr>
                 </thead>
                 <tbody>
                   {docs.map((x) => (
-                    <tr key={`${x.refType}:${x.refId}`} style={{ cursor: 'pointer' }}
-                      onClick={() => setPeek({ refType: x.refType, refId: x.refId })}>
+                    <tr key={`${x.refType}:${x.refId}`} className="click" tabIndex={0}
+                      onClick={() => setPeek({ refType: x.refType, refId: x.refId })}
+                      onKeyDown={(e) => { if (e.key === 'Enter') setPeek({ refType: x.refType, refId: x.refId }); }}>
                       <td><DocLink refType={x.refType} refId={x.refId} refNo={x.refNo}
                         onPeek={setPeek} /></td>
-                      <td>{dmy(x.movedOn)}</td>
+                      <td className="mono">{dmy(x.movedOn)}</td>
                       <td>
-                        <Tag kind={x.direction === 'IN' ? 'ok' : 'warn'}>
-                          {x.direction === 'IN' ? 'In' : 'Out'}
-                        </Tag>{' '}
+                        <Status tone="neutral" icon={x.direction === 'IN' ? 'arrowLeft' : 'arrowRight'}
+                          label={x.direction === 'IN' ? 'In' : 'Out'} />{' '}
                         {KIND[x.kind] || x.kind}
                       </td>
                       <td className="rt mono">{x.lines}</td>
@@ -1110,7 +1100,7 @@ export function Movements() {
                   ))}
                   {!docs.length && (
                     <tr><td colSpan={6}>
-                      <Empty title="Nothing moved in that window">
+                      <Empty title="Nothing moved in this period">
                         Widen the dates, or clear the filters.
                       </Empty>
                     </td></tr>
@@ -1120,30 +1110,28 @@ export function Movements() {
             </div>
           </Card>
         ) : (
-          <Card title={`${rows.length} line${rows.length === 1 ? '' : 's'}`}>
+          <Card title={plural(rows.length, 'line')}>
             <div className="tw">
               <table>
                 <thead>
-                  <tr><th>Date</th><th>Document</th><th>Item</th><th>Why</th>
+                  <tr><th>Date</th><th>Document</th><th>Item</th><th>What happened</th>
                     <th className="rt">In</th><th className="rt">Out</th><th>By</th></tr>
                 </thead>
                 <tbody>
                   {rows.map((m) => (
                     <tr key={m.id}>
-                      <td>{dmy(m.moved_on)}</td>
+                      <td className="mono">{dmy(m.moved_on)}</td>
                       <td><DocLink refType={m.ref_type} refId={m.ref_id} refNo={m.ref_no}
                         onPeek={setPeek} /></td>
-                      <td>{m.item_name}<small className="mono">{m.item_code} · {m.uom}</small></td>
+                      <td>{m.item_name}<small><Code>{m.item_code}</Code> · {m.uom}</small></td>
                       <td>{KIND[m.kind] || m.kind}</td>
-                      <td className="rt mono" style={{ color: 'var(--ok)' }}>
-                        {Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
-                      <td className="rt mono" style={{ color: 'var(--bad)' }}>
-                        {Number(m.qty) < 0 ? qty(Math.abs(m.qty)) : ''}</td>
+                      <td className="rt mono">{Number(m.qty) > 0 ? `+${qty(m.qty)}` : ''}</td>
+                      <td className="rt mono">{Number(m.qty) < 0 ? `−${qty(Math.abs(m.qty))}` : ''}</td>
                       <td>{m.by_name || '—'}</td>
                     </tr>
                   ))}
                   {!rows.length && (
-                    <tr><td colSpan={7}><Empty title="Nothing moved in that window" /></td></tr>
+                    <tr><td colSpan={7}><Empty title="Nothing moved in this period" /></td></tr>
                   )}
                 </tbody>
               </table>

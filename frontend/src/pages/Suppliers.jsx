@@ -3,7 +3,7 @@ import { PageHead } from '../App';
 import { api, money } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, useToast,
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, useToast, Code,
 } from '../components/ui';
 
 /**
@@ -58,7 +58,7 @@ export default function Suppliers() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.id}>
-                      <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.code}</td>
+                      <td><Code>{r.code}</Code></td>
                       <td><b>{r.name}</b></td>
                       <td className="mono">{r.gstin || <span style={{ color: 'var(--faint)' }}>—</span>}</td>
                       <td>{r.contact_name || '—'}

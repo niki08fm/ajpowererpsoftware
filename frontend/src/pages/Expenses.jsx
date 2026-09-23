@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, money, dmy, today, withBranch, canWrite } from '../api';
+import { api, money, dmy, today, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, useToast, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat,
+  useApi, useToast, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, Code, Status,
+  DateField,
 } from '../components/ui';
+import { Icon } from '../components/icons';
+import { expenseStatus, eventWord, eventTone } from '../vocab';
 
 /**
  * Money a site spends that never touches a shelf.
@@ -22,24 +25,13 @@ import {
  * claim — so anybody can ask later how much of what sites asked for
  * was actually granted, and the answer is in the documents.
  *
- * There are no permissions anywhere in this system yet, so there is
- * no separate approver's screen. Everything is here, and a claim
- * waiting to be decided says so.
+ * The site's GM decides claims, from Approvals or from here. A claim
+ * waiting for that decision says whose desk it is on.
+ *
+ * Like every Site screen, this one is the site in the top bar's —
+ * trial 1 carried its own site filter that could disagree with it.
  */
-
-const STATUS = {
-  DRAFT:         { tone: '',      word: 'Draft' },
-  SUBMITTED:     { tone: 'warn',  word: 'Waiting' },
-  APPROVED:      { tone: 'ok',    word: 'Approved' },
-  PART_APPROVED: { tone: 'brand', word: 'Part approved' },
-  NIL_APPROVED:  { tone: 'bad',   word: 'Nothing allowed' },
-  REJECTED:      { tone: 'bad',   word: 'Refused' },
-  RETURNED:      { tone: 'bad',   word: 'Sent back' },
-};
-const Outcome = ({ outcome }) => {
-  const s = STATUS[outcome] || { tone: '', word: outcome };
-  return <Tag kind={s.tone}>{s.word}</Tag>;
-};
+const Outcome = ({ outcome }) => <Status is={expenseStatus(outcome)} />;
 
 /* ===================================================================
    Raising one
@@ -83,7 +75,7 @@ function ClaimForm({ siteId, categories, onDone, onClose }) {
 
   return (
     <Modal wide title="Claim an expense"
-      sub="Nothing is counted until somebody approves it"
+      sub="It counts as the site's cost only once the site's GM approves it"
       onClose={onClose}
       footer={
         <>
@@ -96,26 +88,24 @@ function ClaimForm({ siteId, categories, onDone, onClose }) {
         </>
       }>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <Field label="What kind">
+        <Field label="Kind of expense">
           <select className="inp" style={{ width: 220 }} value={f.categoryId}
             onChange={(e) => set({ categoryId: e.target.value })}>
-            <option value="">Choose one</option>
+            <option value="">Choose the kind…</option>
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </Field>
-        <Field label="Spent on">
-          <input className="inp" type="date" style={{ width: 160 }} value={f.spentOn}
-            max={today()} onChange={(e) => set({ spentOn: e.target.value })} />
-        </Field>
-        <Field label="Amount">
-          <input className="inp rt mono" type="number" min="0" step="0.01"
+        <DateField label="Spent on" value={f.spentOn} max={today()}
+          onChange={(e) => set({ spentOn: e.target.value })} />
+        <Field label="Amount (₹)">
+          <input className="inp rt mono" type="number" min="0" step="0.01" inputMode="decimal"
             style={{ width: 150 }} value={f.amount} placeholder="0.00"
             onChange={(e) => set({ amount: e.target.value })} />
         </Field>
       </div>
       <Field label="What it was for">
         <input className="inp" value={f.description}
-          placeholder="Lorry from the central store to site, 2 trips"
+          placeholder="e.g. Lorry from the central store to site, 2 trips"
           onChange={(e) => set({ description: e.target.value })} />
       </Field>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -128,13 +118,13 @@ function ClaimForm({ siteId, categories, onDone, onClose }) {
             placeholder="Optional" onChange={(e) => set({ billNo: e.target.value })} />
         </Field>
       </div>
-      <Field label="Anything else">
+      <Field label="Note">
         <input className="inp" value={f.note} placeholder="Optional"
           onChange={(e) => set({ note: e.target.value })} />
       </Field>
-      <Banner kind="info" icon="₹">
-        <b>{money(amount)}</b> claimed. Whoever decides it can allow all of it or less —
-        what they allow is what shows on the expense report.
+      <Banner kind="info">
+        <b className="mono">{money(amount)}</b> claimed. The site's GM can allow all of it or part of it —
+        only what is allowed counts as cost on the expense report.
       </Banner>
     </Modal>
   );
@@ -166,7 +156,7 @@ function DecideForm({ head, onDone, onClose }) {
       toast(
         action === 'APPROVED'
           ? `${head.doc_no} — ${money(r.approved)} allowed`
-          : action === 'REJECTED' ? `${head.doc_no} refused` : `${head.doc_no} sent back`,
+          : action === 'REJECTED' ? `${head.doc_no} rejected` : `${head.doc_no} sent back to the site`,
         action === 'APPROVED' ? 'ok' : '',
       );
       onDone();
@@ -180,19 +170,20 @@ function DecideForm({ head, onDone, onClose }) {
 
   return (
     <Modal title={`Decide ${head.doc_no}`}
-      sub={`${head.site_name} · ${head.category} · ${dmy(head.spent_on)}`}
+      sub={`${head.site_name} · ${head.category} · spent ${dmy(head.spent_on)}`}
       onClose={onClose}
       footer={
         <>
           <button className="btn bad" disabled={busy || !note.trim()}
-            onClick={() => decide('REJECTED')} title={!note.trim() ? 'Say why first' : ''}>
-            Refuse
+            onClick={() => decide('REJECTED')} title={!note.trim() ? 'Type the reason first' : 'Close the claim; nothing counts as cost'}>
+            Reject
           </button>
           <button className="btn" disabled={busy || !note.trim()}
             onClick={() => decide('RETURNED')}
-            title={!note.trim() ? 'Say what to fix first' : ''}>
+            title={!note.trim() ? 'Type what to fix first' : 'Return it to the site to change and send again'}>
             Send back
           </button>
+          <span className="sp" />
           <button className="btn pri"
             disabled={busy || over || allowed <= 0 || (needsReason && !note.trim())}
             onClick={() => decide('APPROVED')}>
@@ -204,26 +195,26 @@ function DecideForm({ head, onDone, onClose }) {
       <div className="stats">
         <Stat n={money(claimed)} label="claimed" />
         <Stat n={money(allowed)} label="you are allowing"
-          tone={over ? 'bad' : cut ? 'warn' : 'ok'} />
+          tone={over ? 'bad' : undefined} />
         <Stat n={money(Math.max(0, claimed - allowed))} label="disallowed" />
       </div>
-      <Field label="Allow"
-        hint={over ? 'More than the site asked for — that is a new claim, not an approval'
-          : cut ? 'Less than claimed, so this is a part approval' : undefined}>
-        <input className="inp rt mono" type="number" min="0" step="0.01" max={claimed}
-          style={{ width: 180, ...(over ? { borderColor: 'var(--bad)' } : {}) }}
+      <Field label="Amount allowed (₹)" bad={over}
+        hint={over ? 'More than the site claimed — that would be a new claim, not an approval'
+          : cut ? 'Less than claimed, so this is a part-approval' : 'The full amount claimed'}>
+        <input className="inp rt mono" type="number" min="0" step="0.01" max={claimed} inputMode="decimal"
+          style={{ width: 180, ...(over ? { borderColor: 'var(--st-stop)' } : {}) }}
           value={amount} onChange={(e) => setAmount(e.target.value)} />
       </Field>
       <Field label="Reason"
         hint={needsReason
-          ? 'Required — the site will ask why it was cut'
-          : 'Required to refuse or send back'}>
-        <input className="inp" value={note} placeholder="Why"
+          ? 'Required — the site sees why it was cut'
+          : 'Required to reject or send back; the site sees it'}>
+        <input className="inp" value={note} placeholder="The site will see this"
           onChange={(e) => setNote(e.target.value)} />
       </Field>
       {head.paid_to && (
         <p style={{ color: 'var(--muted)', fontSize: 12 }}>
-          Paid to {head.paid_to}{head.bill_no ? ` · bill ${head.bill_no}` : ''}
+          Paid to {head.paid_to}{head.bill_no ? ` · bill no. ${head.bill_no}` : ''}
           {head.raised_by_name ? ` · claimed by ${head.raised_by_name}` : ''}
         </p>
       )}
@@ -238,7 +229,7 @@ function ExpenseCard({ id, onClose, onChanged }) {
   const toast = useToast();
   const { data, loading, reload } = useApi(`/expenses/${id}`, [id]);
   const [deciding, setDeciding] = useState(false);
-  if (loading || !data) return <Modal title="Expense" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="Expense claim" onClose={onClose}><Loading what="the claim" /></Modal>;
   const { head, events, canDecide, canWithdraw } = data;
 
   const act = async (path, word) => {
@@ -264,17 +255,18 @@ function ExpenseCard({ id, onClose, onChanged }) {
               </button>
             )}
             {head.status === 'RETURNED' && canWrite('/expenses') && (
-              <button className="btn pri" onClick={() => act('submit', 'sent again')}>
-                Send again
+              <button className="btn pri" onClick={() => act('submit', 'sent for approval again')}>
+                Send for approval again
               </button>
             )}
             {canWithdraw && canWrite('/expenses') && (
-              <button className="btn" onClick={() => act('withdraw', 'pulled back')}>
-                Pull it back
+              <button className="btn" onClick={() => act('withdraw', 'withdrawn to draft')}
+                title="Take it back from the GM to change it">
+                Withdraw
               </button>
             )}
             {canDecide && canWrite(`/expenses/${head.expense_id}/decide`) && (
-              <button className="btn pri" onClick={() => setDeciding(true)}>Decide</button>
+              <button className="btn pri" onClick={() => setDeciding(true)}>Decide claim</button>
             )}
           </>
         }>
@@ -284,46 +276,43 @@ function ExpenseCard({ id, onClose, onChanged }) {
           <Stat n={money(head.claimed_amount)} label="claimed" />
           <Stat n={head.approved_amount == null ? '—' : money(head.approved_amount)}
             label="allowed"
-            tone={head.approved_amount == null ? undefined
-              : Number(head.approved_amount) < Number(head.claimed_amount) ? 'warn' : 'ok'} />
+          />
           <Stat n={money(head.cost_amount)} label="counts as cost" />
-          <Stat n={money(head.disallowed_amount)} label="disallowed"
-            tone={Number(head.disallowed_amount) > 0 ? 'bad' : undefined} />
+          <Stat n={money(head.disallowed_amount)} label="disallowed" />
         </div>
 
         {head.status === 'SUBMITTED' && (
-          <Banner kind="warn" icon="…">
-            Waiting to be decided{head.days_waiting > 0 && ` — ${head.days_waiting} day${
-              head.days_waiting === 1 ? '' : 's'} now`}. Nothing is counted as cost until
-            it is.
+          <Banner kind="info" icon="clock">
+            With the site's GM for a decision{head.days_waiting > 0 && ` — ${plural(head.days_waiting, 'day')} so far`}.
+            Nothing counts as cost until it is decided.
           </Banner>
         )}
         {head.outcome === 'PART_APPROVED' && (
-          <Banner kind="brand" icon="½">
+          <Banner kind="info">
             {money(head.claimed_amount)} claimed, <b>{money(head.approved_amount)}</b> allowed.
             {head.decision_note && <> {head.decision_note}</>}
           </Banner>
         )}
         {['REJECTED', 'RETURNED'].includes(head.status) && (
-          <Banner kind="bad" icon="!">
-            {head.status === 'REJECTED' ? 'Refused' : 'Sent back'}
+          <Banner kind={head.status === 'REJECTED' ? 'bad' : 'warn'}>
+            {head.status === 'REJECTED' ? 'Rejected' : 'Sent back to the site — change it and send it for approval again'}
             {head.decided_by_name && ` by ${head.decided_by_name}`}
             {head.decision_note && <> — {head.decision_note}</>}
           </Banner>
         )}
 
-        <Card title="What happened to it">
+        <Card title="History">
           <div className="tw">
             <table>
               <thead>
-                <tr><th>When</th><th>What</th><th className="rt">Amount</th>
-                  <th>Who</th><th>Note</th></tr>
+                <tr><th>When</th><th>What happened</th><th className="rt">Amount</th>
+                  <th>By</th><th>Note</th></tr>
               </thead>
               <tbody>
                 {events.map((ev) => (
                   <tr key={ev.id}>
-                    <td>{dmy(ev.created_at)}</td>
-                    <td><Outcome outcome={ev.action} /></td>
+                    <td className="mono">{dmy(ev.created_at)}</td>
+                    <td><Status tone={eventTone(ev.action)} label={eventWord(ev.action)} /></td>
                     <td className="rt mono">{ev.amount == null ? '—' : money(ev.amount)}</td>
                     <td>{ev.by_name || '—'}</td>
                     <td style={{ color: 'var(--muted)' }}>{ev.note || '—'}</td>
@@ -336,7 +325,7 @@ function ExpenseCard({ id, onClose, onChanged }) {
 
         <p style={{ color: 'var(--muted)', fontSize: 12 }}>
           {head.paid_to && <>Paid to {head.paid_to}. </>}
-          {head.bill_no && <>Bill {head.bill_no}. </>}
+          {head.bill_no && <>Bill no. {head.bill_no}. </>}
           Claimed by {head.raised_by_name || 'unknown'}
           {head.decided_by_name && <>, decided by {head.decided_by_name}</>}.
         </p>
@@ -353,7 +342,7 @@ function ExpenseCard({ id, onClose, onChanged }) {
    The register
    =================================================================== */
 export default function Expenses() {
-  const { branchId, siteId } = useApp();
+  const { site: here } = useApp();
   const [params, setParams] = useSearchParams();
   const [claiming, setClaiming] = useState(false);
   const [open, setOpen] = useState(null);
@@ -367,13 +356,12 @@ export default function Expenses() {
     return p;
   }, { replace: true });
 
-  const site = get('site', String(siteId || ''));
+  // the site in the top bar, always — one site, said once
+  const site = here ? String(here.id) : '';
   const status = get('status', 'ALL');
-  const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const { data: categories } = useApi('/expenses/categories');
 
   const qs = new URLSearchParams({
-    ...(branchId ? { branchId } : {}),
     ...(site ? { siteId: site } : {}),
     ...(get('category') ? { categoryId: get('category') } : {}),
     ...(get('from') ? { from: get('from') } : {}),
@@ -389,12 +377,12 @@ export default function Expenses() {
   const refresh = () => { setTick((t) => t + 1); reload(); };
 
   const grab = () => downloadCsv('expenses', [
-    ['Document', 'Spent on', 'Site', 'Kind', 'What for', 'Paid to', 'Bill',
+    ['Claim', 'Spent on', 'Site', 'Kind', 'What for', 'Paid to', 'Bill no.',
       'Claimed', 'Allowed', 'Counts as cost', 'Status', 'Claimed by', 'Decided by'],
     ...rows.map((r) => [
       r.doc_no, dmy(r.spent_on), r.site_name, r.category, r.description,
       r.paid_to || '', r.bill_no || '', r.claimed_amount,
-      r.approved_amount ?? '', r.cost_amount, r.outcome,
+      r.approved_amount ?? '', r.cost_amount, expenseStatus(r.outcome).label,
       r.raised_by_name || '', r.decided_by_name || '',
     ]),
   ]);
@@ -402,38 +390,31 @@ export default function Expenses() {
   return (
     <>
       <PageHead title="Expenses"
-        sub="What a site spends that never touches a shelf"
+        sub={`Money ${here ? here.name : 'the site'} spends that never goes into stock. It counts as cost only once the GM approves it.`}
         actions={
-          <div style={{ display: 'flex', gap: 9 }}>
-            <button className="btn" onClick={grab} disabled={!rows.length}>Download</button>
+          <>
+            <button className="btn" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>
             {canWrite('/expenses') && (
               <button className="btn pri" onClick={() => setClaiming(true)} disabled={!site}>
-                Claim an expense
+                <Icon name="plus" />Claim an expense
               </button>
             )}
-          </div>
+          </>
         } />
 
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
         <Card>
-          <div className="pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Site" hint={!site ? 'Pick one to claim against' : undefined}>
-              <select className="inp" style={{ width: 220 }} value={site}
-                onChange={(e) => set({ site: e.target.value })}>
-                <option value="">Every site</option>
-                {(sites || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </Field>
+          <div className="pad searchbar" style={{ marginBottom: 0 }}>
             <Field label="Status">
-              <select className="inp" style={{ width: 170 }} value={status}
+              <select className="inp" style={{ width: 200 }} value={status}
                 onChange={(e) => set({ status: e.target.value })}>
                 <option value="ALL">Everything</option>
-                <option value="WAITING">Waiting to be decided</option>
-                <option value="MINE">Not sent yet</option>
-                <option value="APPROVED">Approved</option>
-                <option value="REJECTED">Refused</option>
+                <option value="WAITING">With GM for a decision</option>
+                <option value="MINE">Drafts (not sent)</option>
+                <option value="APPROVED">Approved (in full or part)</option>
+                <option value="REJECTED">Rejected</option>
                 <option value="RETURNED">Sent back</option>
               </select>
             </Field>
@@ -455,53 +436,51 @@ export default function Expenses() {
                 onChange={(e) => set({ to: e.target.value })} />
             </Field>
             <Field label="Find">
-              <input className="inp" style={{ width: 200 }} value={get('q')}
-                placeholder="Document, description, payee"
+              <input className="inp" type="search" style={{ width: 220 }} value={get('q')}
+                placeholder="Claim number, description, payee…"
                 onChange={(e) => set({ q: e.target.value })} />
             </Field>
           </div>
         </Card>
 
-        {loading || !data ? <Loading /> : (
+        {loading && !data ? <Loading what="expense claims" /> : data && (
           <>
-            <div className="stats">
-              <Stat n={data.totals.claims} label="claims" />
+            <div className="stats" style={{ margin: '16px 0' }}>
+              <Stat n={data.totals.claims} label="claims" one="claim" />
               <Stat n={money(data.totals.claimed)} label="claimed" />
-              <Stat n={money(data.totals.approved)} label="allowed" tone="ok" />
-              <Stat n={money(data.totals.disallowed)} label="disallowed"
-                tone={data.totals.disallowed > 0 ? 'bad' : undefined} />
-              <Stat n={money(data.totals.waiting)} label="waiting to be decided"
-                tone={data.totals.waitingCount ? 'warn' : undefined} />
+              <Stat n={money(data.totals.approved)} label="allowed" />
+              <Stat n={money(data.totals.disallowed)} label="disallowed" />
+              <Stat n={money(data.totals.waiting)} label="with GM for a decision" />
             </div>
 
             {data.totals.waitingCount > 0 && status !== 'WAITING' && (
-              <Banner kind="warn" icon="…"
+              <Banner kind="info" icon="clock"
                 action={<button className="btn sm" onClick={() => set({ status: 'WAITING' })}>
                   Show them
                 </button>}>
-                {data.totals.waitingCount} claim{data.totals.waitingCount === 1 ? '' : 's'}{' '}
-                worth {money(data.totals.waiting)} {data.totals.waitingCount === 1 ? 'is' : 'are'}{' '}
-                waiting to be decided. None of it counts as cost yet.
+                {plural(data.totals.waitingCount, 'claim')} worth {money(data.totals.waiting)}{' '}
+                {data.totals.waitingCount === 1 ? 'is' : 'are'} with the GM for a decision. None of it counts as cost yet.
               </Banner>
             )}
 
-            <Card title={`${rows.length} claim${rows.length === 1 ? '' : 's'}`}
-              sub="Click one to see it, decide it, or send it on">
+            <Card title={plural(rows.length, 'claim')}
+              sub="Select a claim to see it, decide it, or send it for approval">
               <div className="tw">
                 <table>
                   <thead>
                     <tr>
-                      <th>Document</th><th>Spent on</th><th>Site</th><th>Kind</th>
+                      <th>Claim</th><th>Spent on</th><th>Site</th><th>Kind</th>
                       <th>What for</th><th className="rt">Claimed</th>
                       <th className="rt">Allowed</th><th>Status</th><th>Claimed by</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.expense_id} style={{ cursor: 'pointer' }}
-                        onClick={() => setOpen(r.expense_id)}>
-                        <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.doc_no}</td>
-                        <td>{dmy(r.spent_on)}</td>
+                      <tr key={r.expense_id} className="click" tabIndex={0}
+                        onClick={() => setOpen(r.expense_id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setOpen(r.expense_id); }}>
+                        <td><Code as="b">{r.doc_no}</Code></td>
+                        <td className="mono">{dmy(r.spent_on)}</td>
                         <td>{r.site_name}</td>
                         <td>{r.category}</td>
                         <td>
@@ -522,10 +501,10 @@ export default function Expenses() {
                     ))}
                     {!rows.length && (
                       <tr><td colSpan={9}>
-                        <Empty title="Nothing here">
-                          {site
-                            ? 'Claim an expense and it will appear, waiting to be decided.'
-                            : 'Pick a site to claim against, or clear the filters.'}
+                        <Empty title={status === 'ALL' ? 'No expense claims yet' : 'No claim matches these filters'}>
+                          {status === 'ALL'
+                            ? 'Claim an expense and it appears here, with the GM for a decision.'
+                            : 'Clear the filters to see every claim.'}
                         </Empty>
                       </td></tr>
                     )}

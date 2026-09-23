@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { PageHead } from '../App';
 import { api, qty, canWrite } from '../api';
 import {
-  useApi, Card, Field, Tag, Empty, Loading, ErrorNote, Banner, Modal, useToast,
+  useApi, Card, Field, Tag, Empty, Loading, ErrorNote, Banner, Modal, useToast, Code,
 } from '../components/ui';
+import { Icon } from '../components/icons';
 
 /**
  * 2,600 items. Everything here is searched and paged on the server —
@@ -86,7 +87,7 @@ export default function Items() {
                 <tbody>
                   {(data?.items || []).map((i) => (
                     <tr key={i.id}>
-                      <td><Tag kind="brand">{i.code}</Tag></td>
+                      <td><Code as="b">{i.code}</Code></td>
                       <td>
                         <b>{i.name}</b>
                         <small>
@@ -96,9 +97,7 @@ export default function Items() {
                       </td>
                       <td>{i.uom}</td>
                       <td>
-                        <Tag kind={i.type === 'CONSUMABLE' ? 'warn' : 'ok'}>
-                          {i.type === 'CONSUMABLE' ? 'Consumable' : 'Billable'}
-                        </Tag>
+                        <span className="tag kind">{i.type === 'CONSUMABLE' ? 'Consumable' : 'Billable'}</span>
                       </td>
                       <td className="rt mono">{Number(i.openingQty) ? qty(i.openingQty) : '—'}</td>
                     </tr>
@@ -216,10 +215,10 @@ function NewItem({ categories, onClose, onSaved }) {
         </Banner>
         <div className="tw">
           <table>
-            <thead><tr><th style={{ width: 110 }}>Code</th><th>Item</th></tr></thead>
+            <thead><tr><th style={{ width: 110 }}>Item code</th><th>Item</th></tr></thead>
             <tbody>
               {similar.similar.map((s) => (
-                <tr key={s.id}><td><Tag kind="brand">{s.code}</Tag></td><td>{s.name}</td></tr>
+                <tr key={s.id}><td><Code>{s.code}</Code></td><td>{s.name}</td></tr>
               ))}
             </tbody>
           </table>
@@ -283,7 +282,7 @@ function NewItem({ categories, onClose, onSaved }) {
       </Field>
 
       <Field label="Makes"
-        hint="Optional. Naming them here is what lets an indent ask for a make and a purchase order be checked against it.">
+        hint="Optional. Naming them here is what lets a PRN ask for a make and a purchase order be checked against it.">
         <input className="inp" value={makeText} list="known-makes"
           placeholder="Polycab — type and press Enter"
           onChange={(e) => setMakeText(e.target.value)}
@@ -298,7 +297,7 @@ function NewItem({ categories, onClose, onSaved }) {
             <span key={m} className="chip">
               {m}
               <button type="button" aria-label={`Remove ${m}`}
-                onClick={() => setMakes((ms) => ms.filter((x) => x !== m))}>✕</button>
+                onClick={() => setMakes((ms) => ms.filter((x) => x !== m))}><Icon name="x" size={14} /></button>
             </span>
           ))}
         </div>

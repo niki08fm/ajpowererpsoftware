@@ -7,6 +7,7 @@ const { conflict, notFound, badRequest } = require('../lib/errors');
 const { log } = require('../lib/audit');
 const password = require('../lib/password');
 const { ROLES, ALL_ROLES } = require('../lib/access');
+const { plural } = require('../lib/words');
 
 /**
  * Logins, and what each one can reach. Management only — lib/access.js
@@ -169,7 +170,7 @@ router.put('/users/:id/sites',
         throw badRequest(`A ${u.department} login sees every site; there is nothing to choose`);
       }
       await log(conn, { entity: 'USER', entityId: u.id, docNo: u.emp_code, action: 'Sites changed',
-        detail: `${want.length} site(s)`, user: req.user });
+        detail: `${plural(want.length, 'site')}`, user: req.user });
     });
     res.json({ ok: true });
   })

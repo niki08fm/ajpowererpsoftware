@@ -5,6 +5,7 @@ const { many, one, run, tx } = require('../config/db');
 const { validate, wrap } = require('../middleware/validate');
 const { log } = require('../lib/audit');
 const { conflict, notFound } = require('../lib/errors');
+const { plural } = require('../lib/words');
 
 /**
  * The goods receipt register.
@@ -156,7 +157,7 @@ router.get('/:id', wrap(async (req, res) => {
                JOIN purchase_order_lines pol ON pol.id = l.po_line_id
               WHERE x.po_line_id = l.po_line_id AND xg.status = 'CONFIRMED') AS pending_qty,
             -- which indents this line is answering, in the order's own split
-            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ' ', ROUND(pli.qty, 3))
+            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ': ', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM ROUND(pli.qty, 3))))
                        ORDER BY i.doc_no SEPARATOR ' · ')
                FROM po_line_indents pli JOIN indents i ON i.id = pli.indent_id
               WHERE pli.po_line_id = l.po_line_id) AS against
@@ -231,7 +232,7 @@ router.post('/:id/confirm', wrap(async (req, res) => {
          g.receipt_date, req.user?.id || null], conn);
     }
     await log(conn, { entity: 'GRN', entityId: g.id, docNo: g.doc_no,
-      action: 'Confirmed', detail: `${lines.length} line(s) on the shelf`, user: req.user });
+      action: 'Confirmed', detail: `${plural(lines.length, 'line')} on the shelf`, user: req.user });
   });
 
   const v = await one(`SELECT * FROM v_grn_status WHERE grn_id = ?`, [g.id]);

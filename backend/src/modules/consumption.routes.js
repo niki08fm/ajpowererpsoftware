@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { centralRate } = require('../lib/rates');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const { plural } = require('../lib/words');
 
 /**
  * Issuing material for consumption, and taking it back.
@@ -163,7 +164,7 @@ router.post('/issues', validate(issueBody), wrap(async (req, res) => {
 
     await log(conn, {
       entity: 'CON', entityId: con.insertId, docNo, action: 'Issued',
-      detail: `${site.name} → ${b.issuedTo} · ${b.lines.length} line(s) · ₹${money(value)}`,
+      detail: `${site.name} → ${b.issuedTo} · ${plural(b.lines.length, 'line')} · ₹${money(value)}`,
       user: req.user,
     });
     return { id: con.insertId, docNo, value: money(value) };
@@ -321,7 +322,7 @@ router.post('/returns', validate(returnBody), wrap(async (req, res) => {
 
     await log(conn, {
       entity: 'RET', entityId: ret.insertId, docNo, action: 'Returned',
-      detail: `${person} → ${site.name} · ${b.lines.length} line(s) · ₹${money(value)}`,
+      detail: `${person} → ${site.name} · ${plural(b.lines.length, 'line')} · ₹${money(value)}`,
       user: req.user,
     });
     return { id: ret.insertId, docNo, value: money(value) };

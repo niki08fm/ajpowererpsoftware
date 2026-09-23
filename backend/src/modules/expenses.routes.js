@@ -90,10 +90,10 @@ router.post('/', validate(expenseBody), wrap(async (req, res) => {
       `INSERT INTO site_expenses
          (doc_no, site_id, branch_id, category_id, spent_on, description, paid_to,
           bill_no, claimed_amount, status, note, raised_by, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(?, NOW(), NULL))`,
       [docNo, site.id, site.branch_id, b.categoryId, b.spentOn, b.description,
        b.paidTo || null, b.billNo || null, b.amount, b.send ? 'SUBMITTED' : 'DRAFT',
-       b.note || null, req.user?.id || null, b.send ? new Date() : null], conn);
+       b.note || null, req.user?.id || null, Boolean(b.send)], conn);
 
     if (b.send) {
       await run(

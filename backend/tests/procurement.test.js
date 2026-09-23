@@ -179,8 +179,11 @@ describe('procurement', () => {
     assert.equal(po.stage, 'AWAITING_GM', 'nothing goes to a supplier unsigned');
     assert.equal(po.receipt_state, 'NOT_SENT');
     assert.equal(po.indents.length, 2);
-    assert.match(po.lines[0].against, /IND/);
-    assert.equal(po.canSign, true);
+    assert.match(po.lines[0].against, /PRN/);
+    // offered to the person it waits on, and to nobody else
+    assert.equal(po.canApprove, false, 'Planning is looking, and Planning does not approve orders');
+    const theirs = (await as(api, GM)(`/purchase-orders/${S.po}`)).body;
+    assert.equal(theirs.canApprove, true);
   });
 
   test('an unsigned order holds the quantity but is not ordered', async (t) => {
@@ -198,7 +201,7 @@ describe('procurement', () => {
     const r = await api(`/purchase-orders/${S.po}/receipts`, { method: 'POST', body: {
       receiptDate: '2026-09-16', lines: [{ poLineId: pend.lines[0].po_line_id, qty: 10 }] } });
     assert.equal(r.status, 409);
-    assert.match(r.body.error.message, /not been signed/);
+    assert.match(r.body.error.message, /not been approved/);
   });
 
   test('the GM sends it back, and has to say why', async (t) => {
@@ -254,11 +257,11 @@ describe('procurement', () => {
     const r = await as(api, MANAGEMENT)(`/purchase-orders/${S.po}/decide`, { method: 'POST', body: {
       action: 'APPROVED', note: 'approved' } });
     assert.equal(r.status, 200);
-    assert.match(r.body.message, /signed/);
+    assert.match(r.body.message, /approved/);
 
     const po = (await api(`/purchase-orders/${S.po}`)).body;
     assert.equal(po.stage, 'AWAITING', 'now in the delivery pipeline');
-    assert.equal(po.canSign, false);
+    assert.equal(po.canApprove, false);
     assert.ok(po.decided_by_name);
   });
 
@@ -480,7 +483,7 @@ describe('procurement', () => {
       poDate: '2026-09-24', comparisonId: c.comparison_id,
       lines: [{ itemId: S.plate, qty: 200, rate: 40, gstRate: 18 }] } });
     assert.equal(early.status, 409);
-    assert.match(early.body.error.message, /waiting to be signed/);
+    assert.match(early.body.error.message, /waiting for approval/);
   });
 
   test('the order carries the comparison it came from', async (t) => {
@@ -693,8 +696,8 @@ describe('procurement', () => {
     const dc = (await api(`/challans/${S.dc}`)).body;
     const actions = dc.events.map((e) => e.action);
     assert.ok(actions.includes('Dispatched'));
-    assert.ok(actions.some((a) => /part acknowledged/i.test(a)));
-    assert.ok(actions.some((a) => /acknowledged in full/i.test(a)));
+    assert.ok(actions.some((a) => /part received/i.test(a)));
+    assert.ok(actions.some((a) => /received in full/i.test(a)));
     assert.ok(dc.events.every((e) => e.user_name), 'every step says who');
     assert.equal(dc.state, 'ACKNOWLEDGED', 'and it reads completed once nothing is outstanding');
     assert.equal(Number(dc.in_transit_qty), 0);
@@ -819,7 +822,7 @@ describe('procurement', () => {
       receiptDate: '2026-10-02', atSiteId: S.store2,
       lines: [{ poLineId: line.po_line_id, qty: 1 }] } });
     assert.equal(wrong.status, 409);
-    assert.match(wrong.body.error.message, /cannot sign for it/);
+    assert.match(wrong.body.error.message, /cannot receive it/);
     assert.match(wrong.body.error.message, /Central Store Hyderabad/);
   });
 
@@ -863,7 +866,7 @@ describe('procurement', () => {
     const inbox = (await api(`/site-store/${S.sitea}/inbox`)).body;
     assert.equal(inbox.challans.length, 1, 'one lorry waiting for a signature');
     assert.equal(Number(inbox.challans[0].in_transit_qty), 35);
-    assert.ok(inbox.challans[0].prns.includes('IND/'), 'and it says which PRNs it answers');
+    assert.ok(inbox.challans[0].prns.includes('PRN/'), 'and it says which PRNs it answers');
     assert.ok(inbox.signed.length >= 1, 'beside what this site has already signed');
 
     const other = (await api(`/site-store/${S.siteb}/inbox`)).body;
@@ -891,7 +894,7 @@ describe('procurement', () => {
 
     const g = (await api(`/grns/${desk.history[0].grn_id}`)).body;
     assert.ok(g.lines.length >= 1);
-    assert.ok(g.lines[0].against.includes('IND/'), 'the note says which PRN it is answering');
+    assert.ok(g.lines[0].against.includes('PRN/'), 'the note says which PRN it is answering');
     assert.equal(g.moves.length, g.lines.length, 'and the stock each line put on the shelf');
     assert.ok(g.po, 'read without leaving it: where the order now stands');
 

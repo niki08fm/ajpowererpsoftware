@@ -105,11 +105,24 @@ router.get('/desk',
          FROM v_site_expense WHERE (? IS NULL OR branch_id = ?) AND status = 'SUBMITTED'`,
       [bId || null, bId || null]);
 
+    // what has come back to a site to be changed — the only PRNs and
+    // claims that need the site's own hands, so the only ones its menu
+    // counts. What is waiting on an approver is counted in Approvals.
+    const indentsSentBack = await many(
+      `SELECT i.id, i.doc_no, s.id AS site_id
+         FROM indents i JOIN sites s ON s.id = i.site_id
+        WHERE i.status = 'RETURNED' ${w} ORDER BY i.created_at`, p);
+    const expensesSentBack = await many(
+      `SELECT expense_id AS id, doc_no, site_id FROM v_site_expense
+        WHERE (? IS NULL OR branch_id = ?) AND status = 'RETURNED'`,
+      [bId || null, bId || null]);
+
     res.json({
       amendmentDue, awaitingBoq, boqDrafts, indentsWaiting: submitted,
       expensesWaiting: Number(expenses.n),
       expensesWaitingValue: Number(expenses.amount),
       expensesOldestDays: Number(expenses.oldest),
+      indentsSentBack, expensesSentBack,
     });
   })
 );

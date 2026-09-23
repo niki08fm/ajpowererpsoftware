@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHead } from '../App';
-import { Empty, Tag } from '../components/ui';
+import {
+  Empty, Tag, Status,
+} from '../components/ui';
 
 /**
  * The first thing a site team or a store team sees.
@@ -88,11 +90,11 @@ function SiteCard({ site, onPick }) {
       <span className="foot">
         {site.head && <span>Head · {site.head.name}</span>}
         {boq
-          ? <Tag kind={boq.state === 'AMENDMENT_DUE' ? 'warn' : boq.state === 'LOCKED' ? 'ok' : ''}>
-              {boq.state === 'LOCKED' ? 'BOQ locked'
-                : boq.state === 'AMENDMENT_DUE' ? 'Amendment due' : 'BOQ in draft'}
-            </Tag>
-          : <Tag>{site.workOrder ? 'No BOQ yet' : 'No work order yet'}</Tag>}
+          ? <Status tone={boq.state === 'AMENDMENT_DUE' ? 'attention' : boq.state === 'LOCKED' ? 'done' : 'neutral'}
+              icon={boq.state === 'LOCKED' ? 'lock' : undefined}
+              label={boq.state === 'LOCKED' ? 'BOQ locked'
+                : boq.state === 'AMENDMENT_DUE' ? 'BOQ amendment due' : 'BOQ in draft'} />
+          : <Status tone="neutral" label={site.workOrder ? 'No BOQ yet' : 'No work order yet'} />}
       </span>
     </button>
   );
@@ -101,13 +103,13 @@ function SiteCard({ site, onPick }) {
 function StoreCard({ store, onPick }) {
   return (
     <button type="button" className="choose-card" onClick={() => onPick(store.id)}>
-      <span className="code">{store.code}{store.is_central ? ' · central' : ''}</span>
+      <span className="code">{store.code}{store.is_central ? ' · central store' : ''}</span>
       <b>{store.name}</b>
       {store.location && <span className="where">{store.location}</span>}
       <span className="foot">
-        <span>{Number(store.items) || 0} item{Number(store.items) === 1 ? '' : 's'} on the shelf</span>
-        {Number(store.awaiting_grn) > 0 && <Tag kind="warn">{store.awaiting_grn} to receive</Tag>}
-        {Number(store.out_unsigned) > 0 && <Tag kind="warn">{store.out_unsigned} out unsigned</Tag>}
+        <span>{Number(store.items) || 0} item{Number(store.items) === 1 ? '' : 's'} in stock</span>
+        {Number(store.awaiting_grn) > 0 && <Status tone="info" icon="box" label={`${store.awaiting_grn} to receive`} />}
+        {Number(store.out_unsigned) > 0 && <Status tone="info" icon="truck" label={`${store.out_unsigned} on the road`} />}
       </span>
     </button>
   );

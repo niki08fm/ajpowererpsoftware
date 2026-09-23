@@ -6,6 +6,7 @@ const { validate, wrap } = require('../middleware/validate');
 const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
+const { plural } = require('../lib/words');
 
 /**
  * Delivery challans: store to site.
@@ -79,7 +80,7 @@ router.get('/:id', wrap(async (req, res) => {
 
   const lines = await many(
     `SELECT l.*,
-            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ' ', ROUND(dli.qty, 3)) ORDER BY i.doc_no SEPARATOR ' · ')
+            (SELECT GROUP_CONCAT(CONCAT(i.doc_no, ': ', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM ROUND(dli.qty, 3)))) ORDER BY i.doc_no SEPARATOR ' · ')
                FROM dc_line_indents dli JOIN indents i ON i.id = dli.indent_id
               WHERE dli.dc_line_id = l.dc_line_id) AS against
        FROM v_dc_line_status l WHERE l.dc_id = ? ORDER BY l.item_name`, [dc.dc_id]);
@@ -334,7 +335,7 @@ router.post('/',
       if (b.dispatch) await dispatchNow(conn, dc.insertId, req.user);
       await log(conn, { entity: 'DC', entityId: dc.insertId, docNo,
         action: b.dispatch ? 'Dispatched' : 'Drafted',
-        detail: `${from.name} → ${to.name} · ${b.lines.length} line(s)`, user: req.user });
+        detail: `${from.name} → ${to.name} · ${plural(b.lines.length, 'line')}`, user: req.user });
       return { id: dc.insertId, docNo };
     });
 
@@ -430,7 +431,7 @@ router.post('/:id/acknowledge',
         if (l.qty > Number(st.in_transit_qty) + 0.0005) {
           throw conflict(
             `${st.item_code} — ${st.item_name}: ${st.in_transit_qty} is still unaccounted for, `
-            + `so ${l.qty} cannot be signed for.`,
+            + `so ${l.qty} cannot be received.`,
             { dcLineId: l.dcLineId, available: Number(st.in_transit_qty) }
           );
         }
@@ -455,7 +456,7 @@ router.post('/:id/acknowledge',
         [done ? 'ACKNOWLEDGED' : 'PART_ACK', dc.id], conn);
 
       await log(conn, { entity: 'DC', entityId: dc.id, docNo: dc.doc_no,
-        action: done ? 'Acknowledged in full' : 'Part acknowledged',
+        action: done ? 'Received in full' : 'Part received',
         detail: done ? '' : `${round3(Number(after.left_qty))} still unaccounted for`,
         user: req.user });
     });

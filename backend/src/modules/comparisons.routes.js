@@ -7,6 +7,7 @@ const { nextDocNo } = require('../lib/docNo');
 const { log } = require('../lib/audit');
 const { conflict, notFound, badRequest } = require('../lib/errors');
 const chain = require('../lib/approvals');
+const { plural } = require('../lib/words');
 
 /**
  * Rate comparison.
@@ -81,6 +82,8 @@ router.get('/:id', wrap(async (req, res) => {
     cheapestIsNotLowest: !!(c.best_landed_supplier_id && c.best_quoted_supplier_id
       && c.best_landed_supplier_id !== c.best_quoted_supplier_id),
     canEdit: c.status === 'DRAFT',
+    // whose desk it is on and at which level, with names
+    approval: await chain.trail('COMPARISON', c.comparison_id, req.user?.id),
   });
 }));
 
@@ -117,7 +120,7 @@ router.post('/',
           + 'One comparison is one branch — compare each branch separately.');
       }
       if (brs.length && branchId && brs[0].branch_id !== branchId) {
-        throw badRequest(`Those indents are from ${brs[0].name}, not the branch this comparison names`);
+        throw badRequest(`Those PRNs are from ${brs[0].name}, not the branch this comparison names`);
       }
       if (brs.length) branchId = brs[0].branch_id;
     }
@@ -156,7 +159,7 @@ router.post('/',
           [c.insertId, sid], conn);
       }
       await log(conn, { entity: 'COMPARISON', entityId: c.insertId, docNo, action: 'Started',
-        detail: `${lines.length} item(s)`, user: req.user });
+        detail: `${plural(lines.length, 'item')}`, user: req.user });
       return { id: c.insertId, docNo };
     });
     res.status(201).json(out);
@@ -299,8 +302,8 @@ router.post('/:id/decide',
     res.json({
       ok: true, supplierId: req.body.supplierId, supplierName: onSheet.supplier_name,
       landed: onSheet.landed, wasCheapest: !dearer, status: 'DECIDED',
-      message: `${onSheet.supplier_name} chosen — ${c.doc_no} now needs two signatures `
-        + 'before an order can be raised off it',
+      message: `${onSheet.supplier_name} chosen — ${c.doc_no} now needs two approvals `
+        + 'before an order can be raised from it',
     });
   })
 );
@@ -320,7 +323,7 @@ router.post('/:id/decide-approval',
     const c = await one(`SELECT * FROM comparisons WHERE id = ?`, [req.params.id]);
     if (!c) throw notFound('No such comparison');
     if (c.status !== 'DECIDED') {
-      throw conflict(`This sheet is ${c.status.toLowerCase()}, not waiting for a signature`);
+      throw conflict(`This comparison is ${c.status.toLowerCase()}, not waiting for approval`);
     }
     if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
       throw badRequest('Say why it is going back');
@@ -348,8 +351,8 @@ router.post('/:id/decide-approval',
       message: req.body.action === 'RETURNED'
         ? `${c.doc_no} is back with the buyer to choose again`
         : step.done
-          ? `${c.doc_no} is approved — an order can be raised off it`
-          : `${c.doc_no} has one signature and needs a second from Management`,
+          ? `${c.doc_no} is approved — an order can be raised from it`
+          : `${c.doc_no} is approved at level 1 and is now with Management`,
     });
   })
 );

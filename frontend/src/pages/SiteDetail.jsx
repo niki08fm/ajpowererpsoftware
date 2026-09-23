@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PageHead } from '../App';
-import { money, qty, dmy } from '../api';
-import { useApi, Card, Tag, Loading, ErrorNote, Banner, Stat, Meter, Empty } from '../components/ui';
+import { money, qty, dmy, plural } from '../api';
+import {
+  useApi, Card, Tag, Loading, ErrorNote, Banner, Stat, Meter, Empty, Code, Status,
+} from '../components/ui';
 import { BoqSheet } from './BoqList';
 
 /**
@@ -34,9 +36,9 @@ export default function SiteDetail() {
         } />
       <div className="page-body">
         {boq?.state === 'AMENDMENT_DUE' && (
-          <Banner kind="bad" icon="▲"
+          <Banner kind="warn"
             action={<button className="btn sm" onClick={() => setSheet(true)}>Open BOQ</button>}>
-            <b>{boq.overLines} line(s) have been indented past their estimate</b> — {Number(boq.worstOverPct).toFixed(1)}%
+            <b>PRNs have gone past the estimate on {plural(boq.overLines, 'line')}</b> — {Number(boq.worstOverPct).toFixed(1)}%
             at the worst line. A variation quantity has to be recorded before the estimate reads true again.
           </Banner>
         )}
@@ -65,15 +67,15 @@ export default function SiteDetail() {
             </Card>
 
             {prog?.lines?.length ? (
-              <Card title="Indented against the BOQ"
+              <Card title="Requested on PRNs, against the BOQ"
                 sub="What has been asked for, and how much of it went past the estimate">
                 <div className="tw">
                   <table className="sheet">
                     <thead>
                       <tr>
-                        <th style={{ width: 56 }}>Sl No</th><th>Item</th><th style={{ width: 70 }}>Unit</th>
+                        <th style={{ width: 56 }}>Sl no</th><th>Item</th><th style={{ width: 70 }}>Unit</th>
                         <th className="rt">BOQ qty</th><th className="rt">Estimate</th>
-                        <th className="rt">Indented</th><th className="rt">Variation</th>
+                        <th className="rt">Requested on PRNs</th><th className="rt">Variation</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -100,10 +102,10 @@ export default function SiteDetail() {
                 </div>
               </Card>
             ) : (
-              <Card title="Indented against the BOQ">
+              <Card title="Requested on PRNs, against the BOQ">
                 <Empty title={site.workOrder ? 'The BOQ is not prepared yet' : 'No work order loaded yet'}>
                   {site.workOrder
-                    ? 'Prepare it from the BOQ screen to start indenting.'
+                    ? 'Prepare it from the BOQ screen; the site can raise PRNs once it is approved.'
                     : 'A site runs on its work order — load it to get started.'}
                 </Empty>
               </Card>
@@ -132,19 +134,19 @@ export default function SiteDetail() {
                 {boq ? (
                   <>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10 }}>
-                      <b className="mono">{boq.docNo}</b>
-                      {boq.state === 'AMENDMENT_DUE' ? <Tag kind="bad">▲ Amendment due</Tag>
-                        : boq.state === 'LOCKED' ? <Tag kind="ok">Locked</Tag> : <Tag kind="warn">Draft</Tag>}
+                      <Code as="b">{boq.docNo}</Code>
+                      {boq.state === 'AMENDMENT_DUE' ? <Status tone="attention" icon="alert" label="Amendment due" />
+                        : boq.state === 'LOCKED' ? <Status tone="done" icon="lock" label="Approved · locked" /> : <Status tone="neutral" label="Draft" />}
                     </div>
-                    <Meter value={boq.prepared} max={boq.ofLines} />
+                    <Meter value={boq.prepared} max={boq.ofLines} label="Work order lines prepared" />
                     <small style={{ color: 'var(--muted)' }}>
                       {boq.prepared} of {boq.ofLines} work order lines prepared
                     </small>
                     <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--muted)' }}>
-                      Beyond the estimate:{' '}
+                      Past the estimate on a PRN:{' '}
                       {boq.policy.overAllow
-                        ? (Number(boq.policy.overPct) ? `${boq.policy.overPct}% allowed` : 'allowed, no ceiling')
-                        : 'not allowed'}
+                        ? (Number(boq.policy.overPct) ? `allowed, up to ${boq.policy.overPct}%` : 'allowed, no ceiling')
+                        : 'not allowed (hard stop)'}
                     </div>
                   </>
                 ) : <Empty title="Not prepared" />}
@@ -154,9 +156,9 @@ export default function SiteDetail() {
             {prog && (
               <Card title="Material">
                 <div className="pad stats">
-                  <Stat n={qty(prog.totals.indented)} label="indented" />
-                  <Stat n={qty(prog.totals.consumed)} label="used" />
-                  <Stat n={qty(prog.totals.atSite)} label="at site" tone="brand" />
+                  <Stat n={qty(prog.totals.indented)} label="requested on PRNs" />
+                  <Stat n={qty(prog.totals.consumed)} label="consumed" />
+                  <Stat n={qty(prog.totals.atSite)} label="in site stock" />
                 </div>
               </Card>
             )}

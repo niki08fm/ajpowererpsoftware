@@ -29,16 +29,15 @@ export const getToken = () => token;
 let onSignedOut = () => {};
 export const whenSignedOut = (fn) => { onSignedOut = fn; };
 
-// the server's write rules, in order, each with whether this login
-// passes it (lib/access.js). The first rule that matches decides.
+// what this login may write: the server's rules in its order, each with
+// this login's verdict (lib/access.js). The first rule that matches
+// decides, here as on the server.
 let writes = [];
-export const setWrites = (list) => {
-  writes = (list || []).map(([src, ok]) => [new RegExp(src), ok]);
-};
+export const setWrites = (list) => { writes = (list || []).map(([s, ok]) => [new RegExp(s), ok]); };
 /** Would the server let this login make this write? */
 export const canWrite = (path) => {
   const rule = writes.find(([re]) => re.test(path.split('?')[0]));
-  return !!rule && rule[1];
+  return rule ? rule[1] : false;
 };
 
 async function request(path, { method = 'GET', body, raw } = {}) {
@@ -81,10 +80,14 @@ export const api = {
 };
 
 /* ------------------------------------------------------- formatting */
-const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
+const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 3 });
+const inr2 = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Indian grouping, because that is how these numbers are read here. */
-export const money = (n) => '₹' + inr.format(Math.round((Number(n) || 0) * 100) / 100);
+/**
+ * Money: Indian grouping and always two decimals — ₹3,398.40, never
+ * ₹3,398.4, which reads like a different amount at a glance.
+ */
+export const money = (n) => '₹' + inr2.format(Math.round((Number(n) || 0) * 100) / 100);
 
 /** Quantities drop trailing zeros: 10 not 10.000, but 12.5 stays 12.5. */
 export const qty = (n) => {
@@ -92,11 +95,53 @@ export const qty = (n) => {
   return inr.format(Math.round(v * 1000) / 1000);
 };
 
+/** A quantity with its noun: 1 unit, 60 units. */
+export const units = (n) => `${qty(n)} ${Number(n) === 1 ? 'unit' : 'units'}`;
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * A date as 22 Sep 2026. The month is a word and the year has four
+ * digits, so 04/05/26 — April or May, 2026 or the 26th — cannot happen.
+ */
 export const dmy = (d) => {
   if (!d) return '—';
   const [y, m, day] = String(d).slice(0, 10).split('-');
-  return `${day}/${m}/${y.slice(2)}`;
+  if (!y || !m || !day) return String(d);
+  return `${Number(day)} ${MONTHS[Number(m) - 1]} ${y}`;
 };
+
+/** The same with the weekday — for the line under a date input. */
+export const longDate = (d) => {
+  if (!d) return '';
+  const [y, m, day] = String(d).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !day) return '';
+  const t = new Date(Date.UTC(y, m - 1, day));
+  return `${DAYS[t.getUTCDay()]}, ${day} ${MONTHS[m - 1]} ${y}`;
+};
+
+/** Whole days from today to a date: negative is in the past. */
+export const daysFrom = (d) => {
+  if (!d) return null;
+  const [y, m, day] = String(d).slice(0, 10).split('-').map(Number);
+  const now = new Date();
+  const a = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((Date.UTC(y, m - 1, day) - a) / 86400000);
+};
+
+/** "in 3 days", "today", "2 days ago" — for dates people plan by. */
+export const relDays = (d) => {
+  const n = daysFrom(d);
+  if (n === null || Number.isNaN(n)) return '';
+  if (n === 0) return 'today';
+  if (n === 1) return 'tomorrow';
+  if (n === -1) return 'yesterday';
+  return n > 0 ? `in ${n} days` : `${-n} days ago`;
+};
+
+/** A count with its noun, pluralised: 1 line, 3 lines. */
+export const plural = (n, one, many = `${one}s`) => `${n} ${Number(n) === 1 ? one : many}`;
 
 export const today = () => new Date().toISOString().slice(0, 10);
 export const addDays = (d, n) => {

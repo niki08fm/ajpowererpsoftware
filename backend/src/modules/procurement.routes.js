@@ -96,13 +96,13 @@ router.post('/demand',
          FROM indents i JOIN sites s ON s.id = i.site_id
         WHERE i.id IN (${marks})`, ids
     );
-    if (indents.length !== ids.length) throw badRequest('One of those indents does not exist');
+    if (indents.length !== ids.length) throw badRequest('One of those PRNs does not exist');
     const notApproved = indents.filter((i) => i.status !== 'APPROVED');
     if (notApproved.length) {
       throw badRequest(`${notApproved[0].doc_no} is not approved, so it cannot be ordered against`);
     }
     const branches = [...new Set(indents.map((i) => i.branch_id))];
-    if (branches.length > 1) throw badRequest('Those indents are in different branches');
+    if (branches.length > 1) throw badRequest('Those PRNs are in different branches');
 
     const sites = [...new Set(indents.map((i) => i.site_id))];
     const store = await centralStore(branches[0]);

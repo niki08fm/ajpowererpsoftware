@@ -1,20 +1,22 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { useApi, Card, Tag, Empty, Loading, ErrorNote, Meter } from '../components/ui';
+import {
+  useApi, Card, Tag, Empty, Loading, ErrorNote, Meter, Status,
+} from '../components/ui';
 import { money, dmy, withBranch, canWrite } from '../api';
 
 /** What a site's BOQ is doing, in one chip. */
 function BoqCell({ site }) {
-  if (!site.workOrder) return <Tag kind="warn">No work order</Tag>;
-  if (!site.boq) return <Tag>Not prepared</Tag>;
+  if (!site.workOrder) return <Status tone="attention" label="No work order" hint="Load the client's work order to start" />;
+  if (!site.boq) return <Status tone="neutral" label="BOQ not prepared" />;
   const { state, prepared, ofLines, worstOverPct } = site.boq;
   if (state === 'AMENDMENT_DUE') {
-    return <Tag kind="bad">▲ Amendment due · {Number(worstOverPct).toFixed(1)}% over</Tag>;
+    return <Status tone="attention" icon="alert" label={`Amendment due · ${Number(worstOverPct).toFixed(1)}% over`} />;
   }
-  if (state === 'LOCKED') return <Tag kind="ok">{site.boq.docNo}</Tag>;
+  if (state === 'LOCKED') return <Status tone="done" icon="lock" label={`${site.boq.docNo} locked`} />;
   return (
     <div style={{ minWidth: 120 }}>
-      <Meter value={prepared} max={ofLines} />
+      <Meter value={prepared} max={ofLines} label="BOQ lines prepared" />
       <small style={{ color: 'var(--muted)' }}>{prepared} of {ofLines} lines prepared</small>
     </div>
   );

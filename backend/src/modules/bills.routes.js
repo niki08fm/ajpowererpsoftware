@@ -210,11 +210,11 @@ async function checkLines(conn, workOrderId, lines, exceptBillId = null) {
     if (Number(l.qty) > room + 0.0005) {
       throw conflict(
         indented <= 0
-          ? `Line ${v.sno} — ${v.description}: no material has been indented for this `
-            + 'line, so there is nothing to bill. Raise an indent first.'
+          ? `Line ${v.sno} — ${v.description}: no material has been requested on a PRN for this `
+            + 'line, so there is nothing to bill. The site raises a PRN first.'
           : `Line ${v.sno} — ${v.description}: ${round3(indented)} ${v.uom} has been `
-            + `indented for and ${round3(already)} is already billed, so `
-            + `${Math.max(room, 0)} can be billed. Indent the rest before invoicing it.`,
+            + `requested on PRNs and ${round3(already)} is already billed, so `
+            + `${Math.max(room, 0)} can be billed. The rest needs a PRN before it can be billed.`,
         {
           woLineId: l.woLineId,
           agreed,
@@ -316,7 +316,7 @@ router.put('/:id', validate(billBody.partial().omit({ siteId: true, raise: true 
       throw conflict(bill.status === 'RAISED'
         ? 'This bill has been raised — it is with the client and cannot be changed'
         : bill.status === 'SUBMITTED'
-          ? 'This bill is out for signature — send it back first to change it'
+          ? 'This bill is with its approvers — it can be changed only after it is sent back'
           : 'This bill is cancelled');
     }
     const b = req.body;
@@ -356,7 +356,7 @@ router.put('/:id', validate(billBody.partial().omit({ siteId: true, raise: true 
 router.post('/:id/raise', wrap(async (req, res) => {
   const bill = await requireBill(req.params.id);
   if (bill.status === 'RAISED') throw conflict('This bill has already been raised');
-  if (bill.status === 'SUBMITTED') throw conflict('This bill is already waiting to be signed');
+  if (bill.status === 'SUBMITTED') throw conflict('This bill is already waiting for approval');
   if (bill.status === 'CANCELLED') throw conflict('This bill is cancelled');
 
   await tx(async (conn) => {
@@ -376,7 +376,7 @@ router.post('/:id/raise', wrap(async (req, res) => {
   const v = await one(`SELECT * FROM v_bill_status WHERE bill_id = ?`, [bill.id]);
   res.json({
     ok: true, status: 'SUBMITTED', value: Number(v.bill_value),
-    message: `${bill.doc_no} is with the site GM; it goes to the client once Management signs too`,
+    message: `${bill.doc_no} is with the site GM; it goes to the client once Management approves too`,
   });
 }));
 
@@ -396,7 +396,7 @@ router.post('/:id/decide',
   wrap(async (req, res) => {
     const bill = await requireBill(req.params.id);
     if (bill.status !== 'SUBMITTED') {
-      throw conflict(`This bill is ${bill.status.toLowerCase()}, not waiting for a signature`);
+      throw conflict(`This bill is ${bill.status.toLowerCase()}, not waiting for approval`);
     }
     if (req.body.action === 'RETURNED' && (req.body.note || '').trim().length < 5) {
       throw badRequest('Say why it is going back');
@@ -431,7 +431,7 @@ router.post('/:id/decide',
         ? `${bill.doc_no} is back in draft with billing`
         : step.done
           ? `${bill.doc_no} is raised — it is the client's now`
-          : `${bill.doc_no} is signed by the GM and now waits for Management`,
+          : `${bill.doc_no} is approved at level 1 (GM) and is now with Management`,
     });
   })
 );
@@ -546,6 +546,8 @@ router.get('/:id', wrap(async (req, res) => {
     canEdit: EDITABLE.includes(head.status),
     canRaise: head.status === 'DRAFT',
     canCancel: head.status === 'RAISED',
+    // whose desk it is on and at which level, with names
+    approval: await chain.trail('BILL', head.bill_id, req.user?.id),
   });
 }));
 

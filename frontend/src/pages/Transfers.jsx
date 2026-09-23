@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
-import { api, qty, dmy, today, canWrite } from '../api';
+import { api, qty, dmy, today, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
 import {
-  useApi, Card, Tag, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast,
+  useApi, Card, Empty, Loading, ErrorNote, Banner, Field, Modal, Stat, useToast, Status, DateField, Code,
 } from '../components/ui';
+import { Icon } from '../components/icons';
 import { useSite } from './SiteStore';
+import { transferState, dcState } from '../vocab';
 
 /**
  * Material moving between two sites, because the store sent it there.
@@ -16,27 +18,18 @@ import { useSite } from './SiteStore';
  * sitting on it, and asks that site to send it straight across rather
  * than buy it twice.
  *
- * The sending site accepts and writes an ordinary challan. The
- * receiving site signs for it in the ordinary way — to them their PRN
- * has simply arrived, and there is nothing new on that end at all.
+ * The sending site accepts and writes an ordinary delivery challan.
+ * The receiving site confirms receipt in the ordinary way — to them
+ * their PRN has simply arrived, and there is nothing new on that end.
  *
- * The sending site is then short of material it indented for its own
- * work, and reorders it from the history screen. That reorder is a real
+ * The sending site is then short of material it asked for on its own
+ * PRN, and reorders it from the history screen. That reorder is a real
  * PRN the store must fulfil, but it is a REPLACEMENT: it does not count
- * against the site's BOQ a second time, because the site indented that
- * material once already.
+ * against the site's BOQ a second time, because the site already asked
+ * for that material once.
  */
 
-const STATE = {
-  AWAITING:   { kind: 'warn',  label: 'Waiting on them' },
-  TO_SEND:    { kind: 'brand', label: 'Accepted — to send' },
-  PART_SENT:  { kind: 'brand', label: 'Part sent' },
-  IN_TRANSIT: { kind: 'warn',  label: 'On the way' },
-  COMPLETE:   { kind: 'ok',    label: 'Done' },
-  REJECTED:   { kind: 'bad',   label: 'Refused' },
-  CANCELLED:  { kind: '',      label: 'Cancelled' },
-};
-const tag = (s) => STATE[s] || { kind: '', label: s };
+const TrTag = ({ state }) => <Status is={transferState(state)} />;
 
 /* ==================================================================
    The store's side: ask a site to send material against a PRN.
@@ -58,8 +51,8 @@ export function SourceFromSitePage() {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (loading) return <Loading />;
-  if (error) return <div className="page-body"><ErrorNote error={error} /></div>;
+  if (loading) return <Loading what="the PRN" />;
+  if (error) return <div className="page-body" style={{ paddingTop: 24 }}><ErrorNote error={error} /></div>;
   if (!data) return <div className="page-body"><Empty title="No such PRN" /></div>;
 
   const { prn, lines, holders } = data;
@@ -90,27 +83,27 @@ export function SourceFromSitePage() {
 
   return (
     <>
-      <PageHead title={`Source ${prn.docNo} from another site`}
-        sub={`${prn.site.name} wants this. Ask a site that already holds it to send it across.`}
+      <PageHead title={`Ask another site to send ${prn.docNo}`}
+        sub={`${prn.site.name} needs this and the store is short. Ask a site that already holds it to send it across.`}
         actions={
           <>
-            <button className="btn" onClick={back}>Back</button>
+            <button className="btn" onClick={back}><Icon name="arrowLeft" size={14} />PRNs to fulfil</button>
             <button className="btn pri"
               disabled={busy || !fromSiteId || !going.length || over.length > 0}
-              onClick={save}>Send the request</button>
+              onClick={save}><Icon name="send" />Send the request</button>
           </>
         } />
       <div className="page-body">
-        <Banner kind="info" icon="◆">
-          The material goes straight from that site to <b>{prn.site.name}</b> and never touches
+        <Banner kind="info">
+          The material goes straight from that site to <b>{prn.site.name}</b> and never passes through
           this store, so none of it appears in the store&rsquo;s stock ledger. {prn.site.name}
-          {' '}signs for it as an ordinary challan and it closes out {prn.docNo}.
+          {' '}confirms receipt of an ordinary delivery challan, and it counts towards <Code>{prn.docNo}</Code>.
         </Banner>
 
         {!candidates.length ? (
-          <Card><Empty title="No other site in this branch is holding any of it">
-            Nothing outstanding on {prn.docNo} is sitting on another site&rsquo;s shelf, so there
-            is nothing to transfer. Buy it, or issue it from this store.
+          <Card><Empty title="No other site in this branch holds any of it">
+            Nothing still to deliver on {prn.docNo} is in another site&rsquo;s stock, so there
+            is nothing to transfer. Buy it, or dispatch it from this store.
           </Empty></Card>
         ) : (
           <>
@@ -118,35 +111,34 @@ export function SourceFromSitePage() {
               <Field label="Ask which site" hint="Only sites holding some of it are listed">
                 <select className="inp" style={{ width: 260 }} value={fromSiteId}
                   onChange={(e) => { setFromSiteId(e.target.value); setAsk({}); }}>
-                  <option value="">Choose a site</option>
+                  <option value="">Choose a site…</option>
                   {candidates.map((c) => (
                     <option key={c.id} value={c.id}>{c.name} · {c.code}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="Wanted by" hint={prn.neededBy ? `PRN says ${dmy(prn.neededBy)}` : 'Optional'}>
-                <input type="date" className="inp" style={{ width: 170 }} value={neededBy}
-                  onChange={(e) => setNeededBy(e.target.value)} />
-              </Field>
+              <DateField label="Needed by" value={neededBy}
+                hint={prn.neededBy ? `The PRN says ${dmy(prn.neededBy)}` : 'Optional'}
+                onChange={(e) => setNeededBy(e.target.value)} />
             </div>
 
             {over.length > 0 && (
-              <Banner kind="bad" icon="!">
-                {over.length} line{over.length === 1 ? '' : 's'} above what that site holds, or
-                above what the PRN is still owed.
+              <Banner kind="bad">
+                {plural(over.length, 'line')} asks for more than that site holds, or more than
+                the PRN still needs.
               </Banner>
             )}
 
-            <Card title={`${prn.docNo} — still outstanding`}
+            <Card title={`${prn.docNo} — still to deliver`}
               sub={fromSiteId ? 'Type what to ask that site for' : 'Choose a site above first'}>
               <div className="tw">
                 <table className="sheet">
                   <thead>
                     <tr>
-                      <th style={{ width: 104 }}>Code</th><th>Item</th>
+                      <th style={{ width: 110 }}>Item code</th><th>Item</th>
                       <th style={{ width: 56 }}>Unit</th>
-                      <th className="rt" style={{ width: 100 }}>Still owed</th>
-                      <th className="rt" style={{ width: 110 }}>They hold</th>
+                      <th className="rt" style={{ width: 110 }}>Still to deliver</th>
+                      <th className="rt" style={{ width: 120 }}>That site holds</th>
                       <th className="rt" style={{ width: 118 }}>Ask for</th>
                     </tr>
                   </thead>
@@ -155,16 +147,17 @@ export function SourceFromSitePage() {
                       const h = fromSiteId ? heldAt(fromSiteId, l.itemId) : 0;
                       return (
                         <tr key={l.itemId}>
-                          <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.itemCode}</td>
+                          <td><Code>{l.itemCode}</Code></td>
                           <td>{l.itemName}{l.make && <small>{l.make}</small>}</td>
                           <td>{l.uom}</td>
                           <td className="rt mono"><b>{qty(l.toDeliverQty)}</b></td>
                           <td className="rt mono"
-                            style={{ color: h > 0 ? 'var(--ok)' : 'var(--faint)' }}>
-                            {fromSiteId ? (h > 0 ? qty(h) : 'nothing held') : '—'}
+                            style={{ color: h > 0 ? undefined : 'var(--faint)' }}>
+                            {fromSiteId ? (h > 0 ? qty(h) : 'None') : '—'}
                           </td>
                           <td>
-                            <input className="inp rt" type="number" min="0" step="any"
+                            <input className="inp rt" type="number" min="0" step="any" inputMode="decimal"
+                              aria-label={`Quantity of ${l.itemName} to ask for`}
                               disabled={!fromSiteId || h <= 0}
                               value={ask[l.itemId] ?? ''}
                               onChange={(e) => setAsk((a) => ({ ...a, [l.itemId]: e.target.value }))} />
@@ -174,7 +167,7 @@ export function SourceFromSitePage() {
                     })}
                     {!lines.length && (
                       <tr><td colSpan={6}>
-                        <Empty title="Nothing outstanding on this PRN" /></td></tr>
+                        <Empty title="Nothing is still to deliver on this PRN" /></td></tr>
                     )}
                   </tbody>
                 </table>
@@ -182,9 +175,9 @@ export function SourceFromSitePage() {
             </Card>
 
             <Card className="pad">
-              <Field label="A word to them" hint="Optional">
+              <Field label="Note to that site" hint="Optional">
                 <input className="inp" value={note} onChange={(e) => setNote(e.target.value)}
-                  placeholder="You have this on the shelf and they need it Thursday" />
+                  placeholder="e.g. You have this in stock and they need it by Thursday" />
               </Field>
             </Card>
           </>
@@ -205,20 +198,19 @@ export function StoreTransfers() {
   const toast = useToast();
 
   const cancel = async (id) => {
-    try { await api.post(`/transfers/${id}/cancel`); toast('Cancelled', 'ok'); reload(); }
+    try { await api.post(`/transfers/${id}/cancel`); toast('Request cancelled', 'ok'); reload(); }
     catch (e) { toast(e.message, 'bad'); }
   };
 
   return (
     <>
-      <PageHead title="Transfer requests"
-        sub="PRNs this store chose to answer from another site's shelf" />
+      <PageHead title="Site-to-site requests"
+        sub="PRNs this store asked another site to answer from its own stock" />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
-        <Banner kind="info" icon="◆">
-          Raised from <b>PRNs to fulfil</b> — the “From a site” button on any PRN this store
-          cannot fill. The material never enters this store, so it never shows in its stock
-          ledger.
+        <Banner kind="info">
+          Raised from <b>PRNs to fulfil</b> with “Ask another site”, on a PRN this store cannot fill.
+          The material never enters this store, so it never shows in its stock ledger.
         </Banner>
 
         <div className="searchbar">
@@ -233,49 +225,48 @@ export function StoreTransfers() {
         {data && (
           <Card className="pad">
             <div className="stats">
-              <Stat n={data.totals.awaiting} label="waiting on the sending site"
-                tone={data.totals.awaiting ? 'warn' : undefined} />
+              <Stat n={data.totals.awaiting} label="waiting for the other site to answer" />
               <Stat n={data.totals.toSend} label="accepted, not yet sent" />
-              <Stat n={data.totals.inTransit} label="on the way" />
-              <Stat n={data.totals.late} label="past the day wanted"
+              <Stat n={data.totals.inTransit} label="on the road" />
+              <Stat n={data.totals.late} label="past their needed-by date" one="past its needed-by date"
                 tone={data.totals.late ? 'bad' : undefined} />
             </div>
           </Card>
         )}
 
-        {loading ? <Loading /> : (
-          <Card title={`${data?.rows.length || 0} request${data?.rows.length === 1 ? '' : 's'}`}>
+        {loading && !data ? <Loading what="requests" /> : (
+          <Card title={plural(data?.rows.length || 0, 'request')}>
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th style={{ width: 140 }}>Request</th>
+                    <th style={{ width: 150 }}>Request</th>
                     <th>Asked of</th><th>To send to</th>
-                    <th style={{ width: 140 }}>Against PRN</th>
-                    <th className="rt" style={{ width: 88 }}>Asked</th>
+                    <th style={{ width: 150 }}>For PRN</th>
+                    <th className="rt" style={{ width: 88 }}>Asked for</th>
                     <th className="rt" style={{ width: 88 }}>Sent</th>
-                    <th style={{ width: 160 }}>State</th>
+                    <th style={{ width: 190 }}>Status</th>
                     <th style={{ width: 90 }} />
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.rows || []).map((r) => (
                     <tr key={r.id}>
-                      <td><b className="mono" style={{ color: 'var(--brand-ink)' }}>{r.docNo}</b>
+                      <td><Code as="b">{r.docNo}</Code>
                         <small>{dmy(r.requestDate)}</small></td>
-                      <td><b>{r.from.name}</b><small>{r.from.code}</small></td>
+                      <td><b>{r.from.name}</b><small><Code>{r.from.code}</Code></small></td>
                       <td>{r.to.name}</td>
-                      <td className="mono">{r.indent.docNo}</td>
+                      <td><Code>{r.indent.docNo}</Code></td>
                       <td className="rt mono">{qty(r.requestedQty)}</td>
                       <td className="rt mono">{r.sentQty ? qty(r.sentQty) : '—'}</td>
                       <td>
-                        <Tag kind={tag(r.state).kind}>{tag(r.state).label}</Tag>
+                        <TrTag state={r.state} />
                         {r.state === 'REJECTED' && r.decideNote && (
-                          <small style={{ color: 'var(--bad)' }}>{r.decideNote}</small>)}
+                          <small>“{r.decideNote}”</small>)}
                       </td>
                       <td>
                         {['AWAITING', 'TO_SEND'].includes(r.state) && r.sentQty === 0 && (
-                          <button className="btn sm bad" onClick={() => cancel(r.id)}>Cancel</button>
+                          <button className="btn sm bad" onClick={() => cancel(r.id)}>Cancel request</button>
                         )}
                       </td>
                     </tr>
@@ -283,7 +274,7 @@ export function StoreTransfers() {
                   {!(data?.rows || []).length && (
                     <tr><td colSpan={8}>
                       <Empty title="This store has not asked any site to send anything">
-                        Use “From a site” on a PRN it cannot fill.
+                        Use “Ask another site” on a PRN the store cannot fill.
                       </Empty>
                     </td></tr>
                   )}
@@ -310,8 +301,8 @@ export function SiteTransfers() {
 
   return (
     <>
-      <PageHead title="Transfers out"
-        sub="Material the store has asked this site to send to another site" />
+      <PageHead title="Send to another site"
+        sub="Material the store has asked this site to send across to another site" />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
 
@@ -327,29 +318,29 @@ export function SiteTransfers() {
         {data && (
           <Card className="pad">
             <div className="stats">
-              <Stat n={data.totals.awaiting} label="to answer"
+              <Stat n={data.totals.awaiting} label="waiting for your answer"
                 tone={data.totals.awaiting ? 'warn' : undefined} />
-              <Stat n={data.totals.toSend} label="accepted, to send" />
-              <Stat n={data.totals.inTransit} label="on the way" />
-              <Stat n={data.totals.late} label="past the day wanted"
+              <Stat n={data.totals.toSend} label="accepted, still to send" />
+              <Stat n={data.totals.inTransit} label="on the road" />
+              <Stat n={data.totals.late} label="past their needed-by date" one="past its needed-by date"
                 tone={data.totals.late ? 'bad' : undefined} />
             </div>
           </Card>
         )}
 
-        {loading ? <Loading /> : (
-          <Card title={`${data?.rows.length || 0} request${data?.rows.length === 1 ? '' : 's'}`}>
+        {loading && !data ? <Loading what="requests" /> : (
+          <Card title={plural(data?.rows.length || 0, 'request')}>
             <div className="tw">
               <table>
                 <thead>
                   <tr>
-                    <th style={{ width: 140 }}>Request</th>
+                    <th style={{ width: 150 }}>Request</th>
                     <th>Send to</th>
-                    <th style={{ width: 140 }}>Against PRN</th>
-                    <th style={{ width: 110 }}>Wanted by</th>
-                    <th className="rt" style={{ width: 88 }}>Asked</th>
+                    <th style={{ width: 150 }}>For PRN</th>
+                    <th style={{ width: 130 }}>Needed by</th>
+                    <th className="rt" style={{ width: 88 }}>Asked for</th>
                     <th className="rt" style={{ width: 88 }}>Sent</th>
-                    <th style={{ width: 160 }}>State</th>
+                    <th style={{ width: 190 }}>Status</th>
                     <th style={{ width: 110 }} />
                   </tr>
                 </thead>
@@ -357,23 +348,23 @@ export function SiteTransfers() {
                   {(data?.rows || []).map((r) => (
                     <tr key={r.id}>
                       <td>
-                        <button className="linkish" onClick={() => setOpen(r.id)}>{r.docNo}</button>
+                        <button className="linkish" onClick={() => setOpen(r.id)}><Code>{r.docNo}</Code></button>
                         <small>{dmy(r.requestDate)}</small>
                       </td>
-                      <td><b>{r.to.name}</b><small>{r.to.code}</small></td>
-                      <td className="mono">{r.indent.docNo}</td>
+                      <td><b>{r.to.name}</b><small><Code>{r.to.code}</Code></small></td>
+                      <td><Code>{r.indent.docNo}</Code></td>
                       <td className="mono">
                         {dmy(r.neededBy)}
-                        {r.daysLate > 0 && <small style={{ color: 'var(--bad)' }}>
-                          {r.daysLate}d late</small>}
+                        {r.daysLate > 0 && <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>
+                          {plural(r.daysLate, 'day')} late</small>}
                       </td>
                       <td className="rt mono">{qty(r.requestedQty)}</td>
                       <td className="rt mono">{r.sentQty ? qty(r.sentQty) : '—'}</td>
-                      <td><Tag kind={tag(r.state).kind}>{tag(r.state).label}</Tag></td>
+                      <td><TrTag state={r.state} /></td>
                       <td>
                         <button className="btn sm" onClick={() => setOpen(r.id)}>
-                          {r.state === 'AWAITING' ? 'Answer'
-                            : ['TO_SEND', 'PART_SENT'].includes(r.state) ? 'Send' : 'Open'}
+                          {r.state === 'AWAITING' ? 'Answer request'
+                            : ['TO_SEND', 'PART_SENT'].includes(r.state) ? 'Dispatch' : 'Open'}
                         </button>
                       </td>
                     </tr>
@@ -382,7 +373,7 @@ export function SiteTransfers() {
                     <tr><td colSpan={8}>
                       <Empty title="Nothing has been asked of this site">
                         The store raises these when it decides to answer another site&rsquo;s PRN
-                        from this site&rsquo;s shelf.
+                        from this site&rsquo;s stock.
                       </Empty>
                     </td></tr>
                   )}
@@ -407,16 +398,16 @@ function RequestDetail({ id, onClose, onChanged }) {
   const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
 
-  if (loading || !data) return <Modal title="Request" onClose={onClose}><Loading /></Modal>;
+  if (loading || !data) return <Modal title="Request" onClose={onClose}><Loading what="the request" /></Modal>;
 
   const decide = async (action) => {
     if (action === 'REJECTED' && !note.trim()) {
-      return toast('Say why — the store has to find it somewhere else', 'bad');
+      return toast('Type the reason — the store has to find it somewhere else', 'bad');
     }
     setBusy(true);
     try {
       await api.post(`/transfers/${id}/decide`, { action, note: note.trim() || undefined });
-      toast(action === 'ACCEPTED' ? 'Accepted' : 'Refused', action === 'ACCEPTED' ? 'ok' : '');
+      toast(action === 'ACCEPTED' ? 'Accepted — dispatch it when it is ready to go' : 'Rejected', action === 'ACCEPTED' ? 'ok' : '');
       reload(); onChanged();
     } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
   };
@@ -425,47 +416,49 @@ function RequestDetail({ id, onClose, onChanged }) {
 
   return (
     <Modal wide title={data.docNo}
-      sub={`Send to ${data.to.name}, against their ${data.indent.docNo}`}
+      sub={`Send to ${data.to.name}, for their ${data.indent.docNo}`}
       onClose={onClose}
-      actions={<Tag kind={tag(data.state).kind}>{tag(data.state).label}</Tag>}
+      actions={<TrTag state={data.state} />}
       footer={
         <>
           <button className="btn" onClick={onClose}>Close</button>
           {data.state === 'AWAITING' && canWrite(`/transfers/${id}/decide`) && (
             <>
-              <button className="btn bad" disabled={busy} onClick={() => decide('REJECTED')}>Refuse</button>
-              <button className="btn pri" disabled={busy} onClick={() => decide('ACCEPTED')}>Accept</button>
+              <button className="btn bad" disabled={busy} onClick={() => decide('REJECTED')}
+                title="Your site will not send it; the store finds it another way">Reject</button>
+              <button className="btn pri" disabled={busy} onClick={() => decide('ACCEPTED')}
+                title="Your site agrees to send it, then dispatches it on a delivery challan">Accept</button>
             </>
           )}
           {['TO_SEND', 'PART_SENT'].includes(data.state) && canWrite('/challans') && (
-            <button className="btn pri" onClick={() => setSending(true)}>Send it</button>
+            <button className="btn pri" onClick={() => setSending(true)}><Icon name="truck" />Dispatch</button>
           )}
         </>
       }>
       <div className="stats" style={{ marginBottom: 14 }}>
         <Stat n={qty(data.requestedQty)} label="asked for" />
         <Stat n={qty(data.sentQty)} label="sent" />
-        <Stat n={qty(data.ackedQty)} label="signed for there" />
-        <Stat n={dmy(data.neededBy)} label="wanted by"
+        <Stat n={qty(data.ackedQty)} label="received there" />
+        <Stat n={dmy(data.neededBy)} label="needed by"
           tone={data.daysLate > 0 ? 'bad' : undefined} />
       </div>
 
       {data.state === 'REJECTED' && (
-        <Banner kind="bad" icon="!">
-          Refused{data.decidedBy ? ` by ${data.decidedBy}` : ''}
+        <Banner kind="bad">
+          Rejected{data.decidedBy ? ` by ${data.decidedBy}` : ''}
           {data.decideNote ? ` — ${data.decideNote}` : ''}
         </Banner>
       )}
       {data.state === 'AWAITING' && short.length > 0 && (
-        <Banner kind="warn" icon="◆">
-          This site is short on {short.length} line{short.length === 1 ? '' : 's'}. You can accept
-          and send what there is — the rest stays open.
+        <Banner kind="warn">
+          This site is short on {plural(short.length, 'line')}. You can accept and send what
+          there is — the rest stays open.
         </Banner>
       )}
       {['TO_SEND', 'PART_SENT', 'IN_TRANSIT', 'COMPLETE'].includes(data.state) && (
-        <Banner kind="info" icon="◆">
-          What you send here leaves this site&rsquo;s shelf. You can ask the store to replace it
-          from <b>Sent &amp; reorder</b> once the challan is out.
+        <Banner kind="info">
+          What you send leaves this site&rsquo;s stock. You can ask the store to replace it from
+          <b> Sent to other sites</b> once the challan is dispatched.
         </Banner>
       )}
 
@@ -473,23 +466,23 @@ function RequestDetail({ id, onClose, onChanged }) {
         <table>
           <thead>
             <tr>
-              <th style={{ width: 104 }}>Code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
-              <th className="rt" style={{ width: 88 }}>Asked</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 56 }}>Unit</th>
+              <th className="rt" style={{ width: 88 }}>Asked for</th>
               <th className="rt" style={{ width: 88 }}>Sent</th>
-              <th className="rt" style={{ width: 96 }}>We hold</th>
+              <th className="rt" style={{ width: 110 }}>In our stock</th>
             </tr>
           </thead>
           <tbody>
             {data.lines.map((l) => (
               <tr key={l.lineId}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{l.itemCode}</td>
+                <td><Code>{l.itemCode}</Code></td>
                 <td>{l.itemName}{l.make && <small>{l.make}</small>}</td>
                 <td>{l.uom}</td>
                 <td className="rt mono"><b>{qty(l.requestedQty)}</b></td>
                 <td className="rt mono">{l.sentQty ? qty(l.sentQty) : '—'}</td>
-                <td className="rt mono" style={{ color: l.shortBy > 0 ? 'var(--bad)' : undefined }}>
+                <td className="rt mono">
                   {qty(l.heldQty)}
-                  {l.shortBy > 0 && <small style={{ color: 'var(--bad)' }}>short {qty(l.shortBy)}</small>}
+                  {l.shortBy > 0 && <small style={{ color: 'var(--st-stop)', fontWeight: 600 }}>short by {qty(l.shortBy)}</small>}
                 </td>
               </tr>
             ))}
@@ -498,7 +491,7 @@ function RequestDetail({ id, onClose, onChanged }) {
       </div>
 
       {data.state === 'AWAITING' && (
-        <Field label="A word back" hint="Required if you are refusing">
+        <Field label="Reason" hint="Required if you reject it — the store sees this">
           <input className="inp" value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
       )}
@@ -538,38 +531,36 @@ function SendModal({ tr, onClose, onSent }) {
   };
 
   return (
-    <Modal wide title={`Send against ${tr.docNo}`}
+    <Modal wide title={`Dispatch for ${tr.docNo}`}
       sub={`${tr.from.name} → ${tr.to.name}. This writes an ordinary delivery challan.`}
       onClose={onClose}
       footer={
         <>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn" disabled={busy || !going.length || over.length > 0}
-            onClick={() => send(false)}>Save draft</button>
+            onClick={() => send(false)}>Save as draft</button>
           <button className="btn pri" disabled={busy || !going.length || over.length > 0}
-            onClick={() => send(true)}>Dispatch</button>
+            onClick={() => send(true)}><Icon name="truck" />Dispatch challan</button>
         </>
       }>
       {over.length > 0 && (
-        <Banner kind="bad" icon="!">
-          {over.length} line{over.length === 1 ? '' : 's'} above what is held or what was asked for.
+        <Banner kind="bad">
+          {plural(over.length, 'line')} sends more than is in stock, or more than was asked for.
         </Banner>
       )}
-      <Banner kind="info" icon="◆">
-        Stock leaves this site on dispatch and lands on {tr.to.name}&rsquo;s shelf when they sign
-        for it. It closes out their {tr.indent.docNo} as though the store had sent it.
+      <Banner kind="info">
+        Stock leaves this site on dispatch and goes into {tr.to.name}&rsquo;s stock when they confirm
+        receipt. It counts towards their {tr.indent.docNo} as though the store had sent it.
       </Banner>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <Field label="Challan date">
-          <input type="date" className="inp" style={{ width: 170 }} value={head.dcDate}
-            onChange={(e) => setHead((h) => ({ ...h, dcDate: e.target.value }))} />
-        </Field>
-        <Field label="Vehicle" hint="Optional">
-          <input className="inp mono" style={{ width: 150 }} value={head.vehicleNo}
+        <DateField label="Dispatch date" value={head.dcDate}
+          onChange={(e) => setHead((h) => ({ ...h, dcDate: e.target.value }))} />
+        <Field label="Vehicle number" hint="Optional">
+          <input className="inp code" style={{ width: 160 }} value={head.vehicleNo} spellCheck={false}
             onChange={(e) => setHead((h) => ({ ...h, vehicleNo: e.target.value.toUpperCase() }))} />
         </Field>
-        <Field label="Driver" hint="Optional">
+        <Field label="Driver's name" hint="Optional">
           <input className="inp" style={{ width: 160 }} value={head.driver}
             onChange={(e) => setHead((h) => ({ ...h, driver: e.target.value }))} />
         </Field>
@@ -579,21 +570,22 @@ function SendModal({ tr, onClose, onSent }) {
         <table className="sheet">
           <thead>
             <tr>
-              <th style={{ width: 104 }}>Code</th><th>Item</th>
-              <th className="rt" style={{ width: 92 }}>Still asked</th>
-              <th className="rt" style={{ width: 92 }}>We hold</th>
-              <th className="rt" style={{ width: 110 }}>Sending</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th>
+              <th className="rt" style={{ width: 100 }}>Still to send</th>
+              <th className="rt" style={{ width: 100 }}>In our stock</th>
+              <th className="rt" style={{ width: 110 }}>Send now</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.lineId}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.itemCode}</td>
+                <td><Code>{r.itemCode}</Code></td>
                 <td>{r.itemName}<small>{r.uom}</small></td>
                 <td className="rt mono">{qty(r.pendingQty)}</td>
                 <td className="rt mono">{qty(r.heldQty)}</td>
                 <td>
-                  <input className="inp rt" type="number" min="0" step="any" value={r.send}
+                  <input className="inp rt" type="number" min="0" step="any" inputMode="decimal" value={r.send}
+                    aria-label={`Quantity of ${r.itemName} to send`}
                     onChange={(e) => setRows((rs) => rs.map((x) => (x.lineId === r.lineId
                       ? { ...x, send: e.target.value } : x)))} />
                 </td>
@@ -607,7 +599,7 @@ function SendModal({ tr, onClose, onSent }) {
 }
 
 /* ==================================================================
-   What this site has sent, document by document — and the reorder.
+   Sent to other sites, document by document — and replacing it.
    ================================================================== */
 export function SentAndReorder() {
   const { siteId } = useSite();
@@ -619,23 +611,24 @@ export function SentAndReorder() {
   const toReorder = (lent.data?.totals.toReorder || 0);
 
   const grab = () => downloadCsv(`transfers-out-${hist.data.site.code}`, [
-    ['Transfer challans sent from', hist.data.site.name],
-    ['Challan', 'Date', 'Sent to', 'Against PRN', 'Request', 'Items', 'Sent', 'Signed for', 'State'],
+    ['Delivery challans sent from', hist.data.site.name],
+    ['Challan', 'Dispatched', 'Sent to', 'For PRN', 'Request', 'Items', 'Sent', 'Received there', 'Status'],
     ...hist.data.docs.map((d) => [d.docNo, dmy(d.date), d.to.name, d.prns, d.requests,
-      d.lineCount, d.sentQty, d.ackedQty, d.state]),
+      d.lineCount, d.sentQty, d.ackedQty, dcState(d.state).label]),
   ]);
 
   return (
     <>
-      <PageHead title="Sent &amp; reorder"
-        sub="Every transfer challan this site has written, and replacing what went out"
+      <PageHead title="Sent to other sites"
+        sub="Every delivery challan this site has sent to another site — and reordering what went out"
         actions={
           <>
-            {hist.data?.docs.length ? <button className="btn" onClick={grab}>Download</button> : null}
+            {hist.data?.docs.length ? <button className="btn" onClick={grab}><Icon name="download" size={14} />Download</button> : null}
             <button className="btn pri" disabled={!siteId || toReorder <= 0}
               hidden={!canWrite(`/transfers/site/${siteId}/reorder`)}
+              title={toReorder <= 0 ? 'Nothing sent out is waiting to be replaced' : undefined}
               onClick={() => setReordering(true)}>
-              Reorder issued stock
+              Reorder what was sent
             </button>
           </>
         } />
@@ -645,61 +638,61 @@ export function SentAndReorder() {
         {lent.data && (
           <Card className="pad">
             <div className="stats">
-              <Stat n={hist.data?.totals.challans || 0} label="transfer challans" />
-              <Stat n={qty(lent.data.totals.lent)} label="units lent out" />
-              <Stat n={qty(lent.data.totals.reordered)} label="already reordered" />
-              <Stat n={qty(lent.data.totals.toReorder)} label="still to reorder"
-                tone={lent.data.totals.toReorder > 0 ? 'warn' : undefined} />
+              <Stat n={hist.data?.totals.challans || 0} label="delivery challans sent" one="delivery challan sent" />
+              <Stat n={qty(lent.data.totals.lent)} label="units sent to other sites" one="unit sent to other sites" />
+              <Stat n={qty(lent.data.totals.reordered)} label="units already reordered" one="unit already reordered" />
+              <Stat n={qty(lent.data.totals.toReorder)} label="units still to reorder" one="unit still to reorder" />
             </div>
           </Card>
         )}
 
-        <Banner kind="info" icon="◆">
+        <Banner kind="info">
           A reorder is a PRN on the central store like any other — but it does <b>not</b> count
-          against this site&rsquo;s BOQ a second time. The material was indented once already and
-          then lent away; counting it twice would overstate the BOQ and the billing ceiling with it.
+          against this site&rsquo;s BOQ a second time. The material was asked for once already and
+          then sent away; counting it twice would overstate the BOQ, and the billing ceiling with it.
         </Banner>
 
-        {hist.loading ? <Loading /> : (
-          <Card title="Sent, document by document"
-            sub="Click a challan to see what was inside it and what the far end signed for">
+        {hist.loading && !hist.data ? <Loading what="challans" /> : (
+          <Card title="Sent, challan by challan"
+            sub="Select a challan to see what was on it and what the other site received">
             <div className="tw">
               <table>
                 <thead>
                   <tr>
                     <th style={{ width: 150 }}>Challan</th>
                     <th>Sent to</th>
-                    <th style={{ width: 150 }}>Against PRN</th>
+                    <th style={{ width: 150 }}>For PRN</th>
                     <th className="rt" style={{ width: 80 }}>Items</th>
                     <th className="rt" style={{ width: 88 }}>Sent</th>
-                    <th className="rt" style={{ width: 96 }}>Signed for</th>
-                    <th className="rt" style={{ width: 96 }}>In transit</th>
-                    <th style={{ width: 120 }}>State</th>
+                    <th className="rt" style={{ width: 110 }}>Received there</th>
+                    <th className="rt" style={{ width: 100 }}>On the road</th>
+                    <th style={{ width: 150 }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(hist.data?.docs || []).map((d) => (
-                    <tr key={d.dcId} style={{ cursor: 'pointer' }} onClick={() => setOpenDoc(d)}>
+                    <tr key={d.dcId} className="click" tabIndex={0} onClick={() => setOpenDoc(d)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') setOpenDoc(d); }}>
                       <td>
-                        <b className="mono" style={{ color: 'var(--brand-ink)' }}>{d.docNo}</b>
+                        <Code as="b">{d.docNo}</Code>
                         <small>{dmy(d.date)}{d.vehicleNo ? ` · ${d.vehicleNo}` : ''}</small>
                       </td>
                       <td>{d.to.name}</td>
-                      <td className="mono">{d.prns}<small>{d.requests}</small></td>
+                      <td><Code>{d.prns}</Code><small><Code>{d.requests}</Code></small></td>
                       <td className="rt mono">{d.lineCount}</td>
                       <td className="rt mono">{qty(d.sentQty)}</td>
                       <td className="rt mono">{qty(d.ackedQty)}</td>
                       <td className="rt mono">
-                        {d.inTransitQty ? <Tag kind="warn">{qty(d.inTransitQty)}</Tag> : '—'}
+                        {d.inTransitQty ? qty(d.inTransitQty) : '—'}
                       </td>
-                      <td>{d.state}</td>
+                      <td><Status is={dcState(d.state)} /></td>
                     </tr>
                   ))}
                   {!(hist.data?.docs || []).length && (
                     <tr><td colSpan={8}>
                       <Empty title="This site has sent nothing to another site">
-                        Transfer challans appear here once the store asks this site to send
-                        something and it does.
+                        Challans appear here once the store asks this site to send something
+                        to another site and it is dispatched.
                       </Empty>
                     </td></tr>
                   )}
@@ -712,19 +705,19 @@ export function SentAndReorder() {
 
       {openDoc && (
         <Modal title={openDoc.docNo}
-          sub={`To ${openDoc.to.name} · ${dmy(openDoc.date)} · against ${openDoc.prns}`}
+          sub={`To ${openDoc.to.name} · ${dmy(openDoc.date)} · for ${openDoc.prns}`}
           onClose={() => setOpenDoc(null)}
           footer={<button className="btn" onClick={() => setOpenDoc(null)}>Close</button>}>
           <div className="tw">
             <table>
-              <thead><tr><th style={{ width: 104 }}>Code</th><th>Item</th>
+              <thead><tr><th style={{ width: 110 }}>Item code</th><th>Item</th>
                 <th style={{ width: 56 }}>Unit</th>
                 <th className="rt" style={{ width: 90 }}>Sent</th>
-                <th className="rt" style={{ width: 100 }}>Signed for</th></tr></thead>
+                <th className="rt" style={{ width: 110 }}>Received there</th></tr></thead>
               <tbody>
                 {openDoc.items.map((i, n) => (
                   <tr key={n}>
-                    <td className="mono" style={{ color: 'var(--brand-ink)' }}>{i.itemCode}</td>
+                    <td><Code>{i.itemCode}</Code></td>
                     <td>{i.itemName}</td><td>{i.uom}</td>
                     <td className="rt mono">{qty(i.sentQty)}</td>
                     <td className="rt mono">{qty(i.ackedQty)}</td>
@@ -746,12 +739,12 @@ export function SentAndReorder() {
 }
 
 /**
- * Reorder issued stock.
+ * Reorder what was sent to other sites.
  *
- * Cumulative: what has been lent out over every transfer challan, what
- * has already been asked back, and what is left. The cap is what was
- * lent — past that point a site is not replacing anything, it is
- * indenting, and indenting has its own form that counts against the BOQ.
+ * Cumulative: what has been sent out over every challan, what has
+ * already been reordered, and what is left. The cap is what was sent —
+ * past that point a site is not replacing anything, it is raising a new
+ * requirement, and that is an ordinary PRN that counts against the BOQ.
  */
 function ReorderModal({ siteId, rows, onClose, onSaved }) {
   const toast = useToast();
@@ -771,61 +764,60 @@ function ReorderModal({ siteId, rows, onClose, onSaved }) {
         indentDate: today(), neededBy: neededBy || null,
         lines: going.map((g) => ({ itemId: g.itemId, qty: Number(order[g.itemId]) })),
       });
-      toast(`${r.docNo} raised — it does not count against the BOQ`, 'ok');
+      toast(`${r.docNo} raised as a replacement PRN — it does not count against the BOQ`, 'ok');
       onSaved();
     } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
   };
 
   return (
-    <Modal wide title="Reorder issued stock"
+    <Modal wide title="Reorder what was sent"
       sub="Replacing material this site sent to another site"
       onClose={onClose}
       footer={
         <>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn pri" disabled={busy || !going.length || over.length > 0}
-            onClick={save}>Raise the PRN</button>
+            onClick={save}>Raise replacement PRN</button>
         </>
       }>
-      <Banner kind="info" icon="◆">
-        This raises an ordinary PRN on the central store, which fulfils it the usual way.
-        It is marked a replacement, so it does <b>not</b> add to this site&rsquo;s indented
-        quantity — that material was indented once already, and lending it out did not make it twice.
+      <Banner kind="info">
+        This raises an ordinary PRN on the central store, which supplies it the usual way.
+        It is marked a replacement, so it does <b>not</b> add to what this site has asked for
+        against its BOQ — that material was asked for once already, and sending it away did not make it twice.
       </Banner>
       {over.length > 0 && (
-        <Banner kind="bad" icon="!">
-          {over.length} line{over.length === 1 ? '' : 's'} above what was lent out.
+        <Banner kind="bad">
+          {plural(over.length, 'line')} asks for more than was sent out.
         </Banner>
       )}
 
-      <Field label="Wanted by" hint="Optional">
-        <input type="date" className="inp" style={{ width: 180 }} value={neededBy}
-          onChange={(e) => setNeededBy(e.target.value)} />
-      </Field>
+      <DateField label="Needed by" value={neededBy} hint="Optional"
+        onChange={(e) => setNeededBy(e.target.value)} />
 
       <div className="tw">
         <table className="sheet">
           <thead>
             <tr>
-              <th style={{ width: 104 }}>Code</th><th>Item</th>
-              <th className="rt" style={{ width: 96 }}>Lent out</th>
-              <th className="rt" style={{ width: 110 }}>Already asked</th>
-              <th className="rt" style={{ width: 110 }}>Still to order</th>
-              <th className="rt" style={{ width: 96 }}>On shelf</th>
-              <th className="rt" style={{ width: 118 }}>Order now</th>
+              <th style={{ width: 110 }}>Item code</th><th>Item</th>
+              <th className="rt" style={{ width: 96 }}>Sent out</th>
+              <th className="rt" style={{ width: 120 }}>Already reordered</th>
+              <th className="rt" style={{ width: 110 }}>Still to reorder</th>
+              <th className="rt" style={{ width: 100 }}>In our stock</th>
+              <th className="rt" style={{ width: 118 }}>Reorder now</th>
             </tr>
           </thead>
           <tbody>
             {live.map((r) => (
               <tr key={r.itemId}>
-                <td className="mono" style={{ color: 'var(--brand-ink)' }}>{r.itemCode}</td>
-                <td>{r.itemName}<small>{r.uom} · {r.challans} challan{r.challans === 1 ? '' : 's'}</small></td>
+                <td><Code>{r.itemCode}</Code></td>
+                <td>{r.itemName}<small>{r.uom} · {plural(r.challans, 'challan')}</small></td>
                 <td className="rt mono">{qty(r.lentQty)}</td>
                 <td className="rt mono">{r.reorderedQty ? qty(r.reorderedQty) : '—'}</td>
                 <td className="rt mono"><b>{qty(r.toReorderQty)}</b></td>
                 <td className="rt mono">{qty(r.onShelfQty)}</td>
                 <td>
-                  <input className="inp rt" type="number" min="0" step="any"
+                  <input className="inp rt" type="number" min="0" step="any" inputMode="decimal"
+                    aria-label={`Quantity of ${r.itemName} to reorder`}
                     value={order[r.itemId] ?? ''}
                     onChange={(e) => setOrder((o) => ({ ...o, [r.itemId]: e.target.value }))} />
                 </td>
@@ -834,7 +826,7 @@ function ReorderModal({ siteId, rows, onClose, onSaved }) {
             {!live.length && (
               <tr><td colSpan={7}>
                 <Empty title="Nothing left to reorder">
-                  Everything this site lent out has already been asked back.
+                  Everything this site sent out has already been reordered.
                 </Empty>
               </td></tr>
             )}
