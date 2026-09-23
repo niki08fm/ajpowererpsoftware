@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { PageHead } from '../App';
 import { money, qty, dmy, plural } from '../api';
 import {
-  useApi, Card, Tag, Loading, ErrorNote, Banner, Stat, Meter, Empty, Code, Status,
+  useApi, Card, Tag, Loading, ErrorNote, Banner, Stat, Meter, Empty, Code, Status, Modal,
 } from '../components/ui';
 import { BoqSheet } from './BoqList';
 
@@ -18,6 +18,7 @@ export default function SiteDetail() {
   const { data: prog, reload: reloadProg } = useApi(`/progress/site/${id}`, [id]);
   // the sheet opens over this page, not somewhere else
   const [sheet, setSheet] = useState(false);
+  const [woOpen, setWoOpen] = useState(false);
 
   if (loading) return <Loading />;
   if (error) return <div className="page-body"><ErrorNote error={error} onRetry={reload} /></div>;
@@ -31,6 +32,7 @@ export default function SiteDetail() {
         actions={
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="btn" onClick={() => nav('/sites')}>Back</button>
+            {site.workOrder && <button className="btn" onClick={() => setWoOpen(true)}>View work order</button>}
             {boq && <button className="btn pri" onClick={() => setSheet(true)}>Open BOQ</button>}
           </div>
         } />
@@ -117,13 +119,18 @@ export default function SiteDetail() {
               <div className="pad">
                 {site.workOrder ? (
                   <>
-                    <div className="stats">
-                      <Stat n={money(site.workOrder.value)} label={site.workOrder.clientWoNo || site.workOrder.docNo} />
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                      <Code as="b">{site.workOrder.clientWoNo || site.workOrder.docNo}</Code>
+                      {site.workOrder.clientWoNo && <small style={{ color: 'var(--muted)' }}>{site.workOrder.docNo}</small>}
                     </div>
-                    <p style={{ color: 'var(--muted)', fontSize: 12.5, marginBottom: 0 }}>
-                      {site.workOrder.lineCount} lines. The client's document — it can only change through
-                      an amendment.
+                    <div className="stats">
+                      <Stat n={money(site.workOrder.value)} label="work order value" />
+                      <Stat n={site.workOrder.lineCount} label="lines" />
+                    </div>
+                    <p style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                      The client's document — it changes only through an amendment.
                     </p>
+                    <button className="btn sm" onClick={() => setWoOpen(true)}>View work order</button>
                   </>
                 ) : <Empty title="Not loaded" />}
               </div>
@@ -166,9 +173,76 @@ export default function SiteDetail() {
         </div>
       </div>
 
+      {woOpen && <WorkOrderView siteId={id} onClose={() => setWoOpen(false)} />}
+
       {sheet && boq && (
         <BoqSheet boqId={boq.id} onClose={() => { setSheet(false); reload(); reloadProg(); }} />
       )}
     </>
+  );
+}
+
+/**
+ * The work order as the client issued it: every line, its quantity and
+ * the supply and installation rates, with the totals. Read-only — it
+ * opens over the site page rather than taking the reader elsewhere.
+ */
+function WorkOrderView({ siteId, onClose }) {
+  const { data: wo, error, loading } = useApi(`/work-orders/site/${siteId}`, [siteId]);
+  return (
+    <Modal full title={wo ? `Work order ${wo.clientWoNo || wo.docNo}` : 'Work order'}
+      sub={wo ? `${wo.docNo} · dated ${dmy(wo.woDate)} · ${plural(wo.lineCount, 'line')}` : undefined}
+      onClose={onClose}
+      footer={<button className="btn pri" onClick={onClose}>Close</button>}>
+      {error && <ErrorNote error={error} />}
+      {loading && !wo ? <Loading what="the work order" /> : wo && (
+        <div style={{ padding: '16px 20px' }}>
+          <div className="stats" style={{ marginBottom: 16 }}>
+            <Stat n={money(wo.value)} label="work order value" />
+            <Stat n={money(wo.supplyValue)} label="supply" />
+            <Stat n={money(wo.instValue)} label="installation" />
+            <Stat n={wo.lineCount} label="lines" />
+          </div>
+          <div className="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 60 }}>Sl no</th><th>Description</th><th style={{ width: 70 }}>Unit</th>
+                  <th className="rt" style={{ width: 80 }}>Qty</th>
+                  <th className="rt" style={{ width: 100 }}>Supply rate</th>
+                  <th className="rt" style={{ width: 100 }}>Install rate</th>
+                  <th className="rt" style={{ width: 120 }}>Supply</th>
+                  <th className="rt" style={{ width: 120 }}>Installation</th>
+                  <th className="rt" style={{ width: 130 }}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {wo.lines.map((l) => (
+                  <tr key={l.id}>
+                    <td className="sn">{l.sno}</td>
+                    <td>{l.description}</td>
+                    <td>{l.uom}</td>
+                    <td className="rt mono">{qty(l.qty)}</td>
+                    <td className="rt mono">{money(l.supply_rate)}</td>
+                    <td className="rt mono">{money(l.inst_rate)}</td>
+                    <td className="rt mono">{money(l.supply_amount)}</td>
+                    <td className="rt mono">{money(l.inst_amount)}</td>
+                    <td className="rt mono"><b>{money(l.line_total)}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th colSpan={6} style={{ textAlign: 'left' }}>Total</th>
+                  <th className="rt mono">{money(wo.supplyValue)}</th>
+                  <th className="rt mono">{money(wo.instValue)}</th>
+                  <th className="rt mono">{money(wo.value)}</th>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
