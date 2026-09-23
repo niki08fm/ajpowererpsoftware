@@ -396,7 +396,7 @@ router.get('/:id', wrap(async (req, res) => {
   );
   if (!ind) throw notFound('No such PRN');
   const lines = await many(
-    `SELECT il.id, il.qty, il.over_qty, il.remark, il.boq_line_id,
+    `SELECT il.id, il.qty, il.over_qty, il.remark, il.boq_line_id, il.item_id, il.make_id,
             bl.sno, i2.code AS item_code, i2.name AS item_name, u.code AS uom,
             mk.name AS make_name,
             st.effective_est, st.boq_qty, st.est_qty, st.var_qty, st.balance, st.committed_qty

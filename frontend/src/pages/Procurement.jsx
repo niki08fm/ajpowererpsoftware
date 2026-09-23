@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp, PageHead } from '../App';
 import { api, qty, money, dmy, today, addDays, withBranch, canWrite, plural } from '../api';
 import { downloadCsv } from '../download';
@@ -42,6 +42,8 @@ export default function Procurement() {
     [branchId, qs]);
   const { data: sites } = useApi(withBranch('/sites', branchId), [branchId]);
   const [picked, setPicked] = useState([]);
+  // the same demand two ways: PRN by PRN, or added up per item
+  const [view, setView] = useState('prn');
   const [buying, setBuying] = useState(false);
   const [comparing, setComparing] = useState(false);
   const nav = useNavigate();
@@ -172,7 +174,18 @@ export default function Procurement() {
           </Banner>
         )}
 
-        {loading && !data ? <Loading what="PRNs to buy" /> : (
+        <div style={{ margin: '0 0 12px' }}>
+          <div className="seg" role="group" aria-label="How to show what is to buy">
+            <button type="button" aria-pressed={view === 'prn'} onClick={() => setView('prn')}>By PRN</button>
+            <button type="button" aria-pressed={view === 'item'} onClick={() => setView('item')}>By item — all PRNs added up</button>
+          </div>
+        </div>
+
+        {view === 'item' && (
+          <ItemsToBuy branchId={branchId} siteId={f.siteId} q={f.q} />
+        )}
+
+        {view === 'prn' && (loading && !data ? <Loading what="PRNs to buy" /> : (
           <Card title="Approved PRNs">
             <div className="tw">
               <table>
@@ -226,7 +239,7 @@ export default function Procurement() {
               </table>
             </div>
           </Card>
-        )}
+        ))}
       </div>
 
       {buying && (
@@ -470,5 +483,136 @@ function NewOrder({ indentIds, comparison, onClose, onDone }) {
         </div>
       </Card>
     </Modal>
+  );
+}
+
+/* ===================================================================
+   What to buy, per item: every approved PRN that still has some of an
+   item to order, added up. Open an item to see which PRNs want it and
+   on which BOQ lines of each (1a-5, 2b-10).
+   =================================================================== */
+function ItemsToBuy({ branchId, siteId, q }) {
+  const [sort, setSort] = useState('item');
+  const [open, setOpen] = useState(null);
+  const qs = new URLSearchParams({
+    ...(branchId ? { branchId } : {}), ...(siteId ? { siteId } : {}), ...(q ? { q } : {}), sort,
+  }).toString();
+  const { data, error, loading, reload } = useApi(`/procurement/items?${qs}`, [qs]);
+  const rows = data?.rows || [];
+  const key = (r) => `${r.item_id}-${r.make_id || ''}`;
+
+  const grab = () => downloadCsv('items-to-buy', [
+    ['Item code', 'Item', 'Make', 'Unit', 'PRNs', 'Sites', 'Asked for', 'Ordered', 'Awaiting approval', 'To order', 'First needed'],
+    ...rows.map((r) => [r.item_code, r.item_name, r.make_name || '', r.uom, r.prns, r.site_names,
+      r.indented_qty, r.ordered_qty, r.pending_gm_qty, r.to_order_qty, r.first_needed ? dmy(r.first_needed) : '']),
+  ]);
+
+  if (error) return <ErrorNote error={error} onRetry={reload} />;
+  return (
+    <Card title="Items to buy"
+      sub={`${plural(rows.length, 'item')} still to order across approved PRNs — open one to see its PRNs and BOQ lines`}
+      actions={
+        <>
+          <select className="inp" style={{ width: 190 }} value={sort} onChange={(e) => setSort(e.target.value)}
+            aria-label="Sort items">
+            <option value="item">Item name</option>
+            <option value="qty">Most to order</option>
+            <option value="prns">On most PRNs</option>
+            <option value="needed">Needed soonest</option>
+          </select>
+          <button className="btn sm" onClick={grab} disabled={!rows.length}><Icon name="download" size={14} />Download</button>
+        </>
+      }>
+      {loading && !data ? <Loading what="items to buy" /> : (
+        <div className="tw">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 28 }} />
+                <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
+                <th className="rt">PRNs</th><th>Sites</th><th>First needed</th>
+                <th className="rt">Asked for</th><th className="rt">Ordered</th><th className="rt">To order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const k = key(r);
+                const isOpen = open === k;
+                return (
+                  <Fragment key={k}>
+                    <tr className="click" tabIndex={0} aria-expanded={isOpen}
+                      onClick={() => setOpen(isOpen ? null : k)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(isOpen ? null : k); } }}>
+                      <td><Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={14} /></td>
+                      <td style={{ whiteSpace: 'nowrap' }}><Code>{r.item_code}</Code></td>
+                      <td><b>{r.item_name}</b>{r.make_name && <small>{r.make_name}</small>}</td>
+                      <td>{r.uom}</td>
+                      <td className="rt mono">{r.prns}</td>
+                      <td>{r.site_names}</td>
+                      <td className="mono">{r.first_needed ? dmy(r.first_needed) : '—'}</td>
+                      <td className="rt mono">{qty(r.indented_qty)}</td>
+                      <td className="rt mono">
+                        {Number(r.ordered_qty) ? qty(r.ordered_qty) : '—'}
+                        {Number(r.pending_gm_qty) > 0 && <small>{qty(r.pending_gm_qty)} awaiting approval</small>}
+                      </td>
+                      <td className="rt mono"><b>{qty(r.to_order_qty)}</b></td>
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td />
+                        <td colSpan={9} style={{ background: 'var(--line-2)' }}>
+                          <ItemSplit item={r} branchId={branchId} siteId={siteId} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+              {!rows.length && (
+                <tr><td colSpan={10}>
+                  <Empty icon="check" title="Nothing to buy">
+                    Every item on the approved PRNs here is already on a purchase order.
+                  </Empty>
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** One item: the PRNs that want it, and the BOQ lines of each. */
+function ItemSplit({ item, branchId, siteId }) {
+  const qs = new URLSearchParams({
+    ...(branchId ? { branchId } : {}), ...(siteId ? { siteId } : {}),
+    ...(item.make_id ? { makeId: item.make_id } : {}),
+  }).toString();
+  const { data, loading, error } = useApi(`/procurement/items/${item.item_id}?${qs}`, [qs, item.item_id]);
+  if (loading && !data) return <Loading what="the PRNs" />;
+  if (error) return <ErrorNote error={error} />;
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>PRN</th><th>Site</th><th>Needed by</th><th>BOQ lines</th>
+          <th className="rt">Asked for</th><th className="rt">Ordered</th><th className="rt">To order</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.prns.map((p) => (
+          <tr key={p.id}>
+            <td><Link to={`/indents/${p.id}`}><Code as="b">{p.doc_no}</Code></Link><small>{dmy(p.indent_date)}</small></td>
+            <td>{p.site_name}<small>{p.branch_name}</small></td>
+            <td className="mono">{p.needed_by ? dmy(p.needed_by) : '—'}</td>
+            <td className="mono">{p.lines.map((l) => `${l.sno}-${qty(l.qty)}`).join(', ')}</td>
+            <td className="rt mono">{qty(p.indented_qty)}</td>
+            <td className="rt mono">{Number(p.ordered_qty) ? qty(p.ordered_qty) : '—'}</td>
+            <td className="rt mono"><b>{qty(p.to_order_qty)}</b></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

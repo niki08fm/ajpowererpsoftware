@@ -109,6 +109,29 @@ describe('procurement', () => {
     assert.equal(q.length, 1);
   });
 
+  test('by item, both PRNs add up to one line to buy', async (t) => {
+    if (!live) return t.skip('no database');
+    const { rows } = (await api('/procurement/items?branchId=1')).body;
+    const box = rows.find((r) => r.item_id === S.box);
+    assert.ok(box, 'the item is on the list');
+    assert.equal(Number(box.to_order_qty), 100, '60 + 40');
+    assert.equal(Number(box.prns), 2);
+    assert.equal(Number(box.sites), 2);
+
+    const one = (await api(`/procurement/items?branchId=1&siteId=${S.sitea}`)).body.rows
+      .find((r) => r.item_id === S.box);
+    assert.equal(Number(one.to_order_qty), 60, 'filtered to one site');
+  });
+
+  test('opening an item shows each PRN and the BOQ lines it was asked on', async (t) => {
+    if (!live) return t.skip('no database');
+    const { prns } = (await api(`/procurement/items/${S.box}?branchId=1`)).body;
+    assert.deepEqual(prns.map((p) => p.id), [S.inda, S.indb], 'soonest needed first');
+    assert.equal(prns[0].lines.length, 1);
+    assert.equal(Number(prns[0].lines[0].qty), 60);
+    assert.ok(prns[0].lines[0].sno, 'with its BOQ line number');
+  });
+
   /* --------------------------------------------------------- demand */
   test('two indents for the same item come out as one line to buy', async (t) => {
     if (!live) return t.skip('no database');
@@ -281,6 +304,8 @@ describe('procurement', () => {
     if (!live) return t.skip('no database');
     assert.equal((await api('/procurement/queue?branchId=1')).body.length, 0);
     assert.equal((await api('/procurement/queue?branchId=1&stage=ALL')).body.length, 2);
+    assert.equal((await api('/procurement/items?branchId=1')).body.rows.length, 0,
+      'and nothing is left to buy by item either');
   });
 
   /* -------------------------------------------------------- receipt */

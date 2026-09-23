@@ -207,10 +207,40 @@ async function trail(docType, docId, userId) {
       ? (await many(`SELECT name FROM users WHERE id IN (?) ORDER BY name`, [who])).map((u) => u.name)
       : [];
   }
+  // every level, signed or not, with the person or people it belongs to,
+  // so a reader sees at once how many are done, how many are left, and
+  // whose they are
+  const names = async (ids) => (ids.length
+    ? (await many(`SELECT name FROM users WHERE id IN (?) ORDER BY name`, [ids])).map((u) => u.name)
+    : []);
+  const signer = async (id) => (id ? (await one(`SELECT name FROM users WHERE id = ?`, [id]))?.name : null);
+  const firstIsGm = TYPES[chain.doc_type].firstLevel === 'GM';
+  const gmRow = firstIsGm && chain.site_id
+    ? await one(`SELECT u.id, u.name FROM sites s JOIN users u ON u.id = s.gm_user_id WHERE s.id = ?`,
+      [chain.site_id]) : null;
+  const mgmt = (await management()).map((u) => Number(u.id));
+  const steps = [];
+  for (let lv = 1; lv <= Number(chain.levels); lv += 1) {
+    const by = chain[`level${lv}_by`];
+    const at = chain[`level${lv}_at`];
+    const role = lv === 1 && gmRow ? 'General Manager' : 'Management';
+    const who = lv === 1 && gmRow ? [gmRow.name]
+      : await names(mgmt.filter((id) => id !== Number(chain.level1_by || 0)));
+    steps.push({
+      level: lv, role, who,
+      state: by ? 'APPROVED'
+        : chain.status === 'RETURNED' && Number(chain.level) === lv ? 'RETURNED'
+          : pending && Number(chain.level) === lv ? 'WAITING' : 'LATER',
+      by: await signer(by), at,
+    });
+  }
+
   return {
     status: chain.status,
     level: Number(chain.level),
     levels: Number(chain.levels),
+    steps,
+    approvedCount: steps.filter((st) => st.state === 'APPROVED').length,
     waitingSince: chain.waiting_since,
     waitingOn,
     waitingOnNames,

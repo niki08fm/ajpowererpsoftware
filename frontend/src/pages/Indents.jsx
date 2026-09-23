@@ -596,6 +596,202 @@ function prnNext(data) {
   }
 }
 
+/**
+ * The PRN's items, once.
+ *
+ * "By item" is what the PRN asks for and where each item has got to:
+ * one row per item, the BOQ lines it came off in a column of their own
+ * (1a-5, 2b-10), and — once it has been sent — ordered, at the central
+ * store, on the road, at site and pending. "As raised" is the same PRN
+ * the way the site built it, one row per BOQ line against its estimate.
+ */
+const FLOW = [
+  ['ordered_qty', 'PO raised'], ['received_qty', 'Received at central store'],
+  ['in_transit_qty', 'On the road'], ['at_site_qty', 'Received at site'],
+  ['to_deliver_qty', 'Pending'],
+];
+
+function PrnItems({ data, stage }) {
+  const [view, setView] = useState('item');
+  const n = (v) => Number(v) || 0;
+  const cell = (v) => (n(v) ? qty(v) : '—');
+  const sent = data.status !== 'DRAFT' && data.pipeline;
+  const approved = ['APPROVED', 'CLOSED'].includes(data.status);
+
+  // one row per item (and make), with the BOQ lines it was raised on
+  const items = useMemo(() => {
+    const flow = Object.fromEntries((data.flow || []).map((f) => [`${f.item_id}-${f.make_id || ''}`, f]));
+    const by = new Map();
+    for (const l of data.lines) {
+      const k = `${l.item_id}-${l.make_id || ''}`;
+      const it = by.get(k) || {
+        key: k, item_code: l.item_code, item_name: l.item_name, uom: l.uom,
+        make_name: l.make_name, qty: 0, boq: [], over: 0,
+      };
+      it.qty += n(l.qty);
+      it.over += n(l.over_qty);
+      it.boq.push(`${l.sno}-${qty(l.qty)}`);
+      by.set(k, it);
+    }
+    return [...by.values()].map((it) => ({ ...it, f: flow[it.key] || {} }))
+      .sort((x, y) => x.item_name.localeCompare(y.item_name));
+  }, [data]);
+
+  const sum = (k) => items.reduce((t, it) => t + n(it.f[k]), 0);
+
+  const grab = () => downloadCsv(`prn-${data.docNo}`, view === 'item' ? [
+    ['PRN', data.docNo], ['Site', data.site.name], [],
+    ['Item code', 'Item', 'Unit', 'Asked for', 'BOQ lines', ...(sent ? FLOW.map((c) => c[1]) : [])],
+    ...items.map((it) => [it.item_code, it.item_name, it.uom, it.qty, it.boq.join(', '),
+      ...(sent ? FLOW.map(([k]) => n(it.f[k])) : [])]),
+  ] : [
+    ['PRN', data.docNo], ['Site', data.site.name], [],
+    ['Sl no', 'Item code', 'Item', 'Unit', 'Estimate', 'This PRN', 'Over estimate'],
+    ...data.lines.map((l) => [l.sno, l.item_code, l.item_name, l.uom, l.effective_est, l.qty, l.over_qty]),
+  ]);
+
+  return (
+    <Card title="Items"
+      sub={view === 'item'
+        ? `${plural(items.length, 'item')} — the BOQ lines each was asked for on, and where it has got to`
+        : `${plural(data.lines.length, 'BOQ line')} — the PRN as the site raised it, against the estimate`}
+      actions={
+        <>
+          <div className="seg" role="group" aria-label="How to show the items">
+            <button type="button" aria-pressed={view === 'item'} onClick={() => setView('item')}>By item</button>
+            <button type="button" aria-pressed={view === 'raised'} onClick={() => setView('raised')}>As raised</button>
+          </div>
+          <button className="btn sm" onClick={grab}><Icon name="download" size={14} />Download</button>
+        </>
+      }>
+      {sent && view === 'item' && <div className="pad"><Journey stage={stage} /></div>}
+
+      <div className="tw">
+        {view === 'item' ? (
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
+                <th className="rt">Asked for</th>
+                <th title="BOQ line - quantity asked on it">BOQ lines</th>
+                {sent && FLOW.map(([k, label]) => <th key={k} className="rt">{label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.key}>
+                  <td style={{ whiteSpace: 'nowrap' }}><Code>{it.item_code}</Code></td>
+                  <td>{it.item_name}{it.make_name && <small>{it.make_name}</small>}
+                    {it.over > 0 && <small style={{ color: 'var(--st-stop)' }}>{qty(it.over)} past the estimate</small>}</td>
+                  <td>{it.uom}</td>
+                  <td className="rt mono"><b>{qty(it.qty)}</b></td>
+                  <td className="mono" style={{ color: 'var(--muted)' }}>{it.boq.join(', ')}</td>
+                  {sent && (
+                    <>
+                      <td className="rt mono">
+                        {cell(it.f.ordered_qty)}
+                        {n(it.f.pending_gm_qty) > 0 && <small>{qty(it.f.pending_gm_qty)} awaiting approval</small>}
+                        {approved && n(it.f.to_order_qty) > 0 && (
+                          <small style={{ color: 'var(--st-stop)' }}>{qty(it.f.to_order_qty)} not ordered</small>
+                        )}
+                      </td>
+                      <td className="rt mono">{cell(it.f.received_qty)}</td>
+                      <td className="rt mono">{cell(it.f.in_transit_qty)}</td>
+                      <td className="rt mono">{n(it.f.at_site_qty) ? <b>{qty(it.f.at_site_qty)}</b> : '—'}</td>
+                      <td className="rt mono">
+                        {n(it.f.to_deliver_qty) ? <b>{qty(it.f.to_deliver_qty)}</b> : <Status tone="done" label="None" />}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+            {items.length > 1 && (
+              <tfoot>
+                <tr>
+                  <th colSpan={3} style={{ textAlign: 'left' }}>All items</th>
+                  <th className="rt mono">{qty(items.reduce((t, it) => t + it.qty, 0))}</th>
+                  <th />
+                  {sent && FLOW.map(([k]) => <th key={k} className="rt mono">{qty(sum(k))}</th>)}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 70 }}>Sl no</th><th>Item</th><th>Unit</th>
+                <th className="rt">Estimate</th><th className="rt">This PRN</th><th>Against estimate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className="sn">{l.sno}</td>
+                  <td><b>{l.item_name}</b><small><Code>{l.item_code}</Code>{l.make_name ? ` · ${l.make_name}` : ''}</small></td>
+                  <td>{l.uom}</td>
+                  <td className="rt mono">{qty(l.effective_est)}</td>
+                  <td className="rt mono"><b>{qty(l.qty)}</b></td>
+                  <td>
+                    {Number(l.over_qty) > 0
+                      ? <Status tone={data.severity === 'bad' ? 'stopped' : 'attention'} icon="alert"
+                        label={`${qty(l.over_qty)} over`} />
+                      : <span style={{ color: 'var(--faint)' }}>Within estimate</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Who approves this PRN, level by level: how many have approved, how
+ * many are left, and whose each one is.
+ */
+const STEP = {
+  APPROVED: { tone: 'done', label: 'Approved' },
+  WAITING: { tone: 'attention', label: 'Waiting' },
+  RETURNED: { tone: 'stopped', label: 'Sent back' },
+  LATER: { tone: 'neutral', label: 'Not reached yet' },
+};
+
+function ApprovalSteps({ approval }) {
+  const steps = approval.steps || [];
+  const done = approval.approvedCount || 0;
+  const left = steps.length - done;
+  return (
+    <Card title={`Approval — ${done} of ${steps.length} approved`}
+      sub={approval.status === 'APPROVED' ? 'Fully approved'
+        : approval.status === 'RETURNED' ? 'Sent back to the site — it starts again from level 1 when resent'
+          : `${plural(left, 'approval')} left`}>
+      <div className="tw">
+        <table>
+          <thead>
+            <tr><th style={{ width: 80 }}>Level</th><th>Approver</th><th>Who</th><th>Status</th><th>When</th></tr>
+          </thead>
+          <tbody>
+            {steps.map((st) => (
+              <tr key={st.level}>
+                <td className="mono">{st.level} of {steps.length}</td>
+                <td>{st.role}</td>
+                <td><b>{st.by || st.who.join(' or ') || '—'}</b></td>
+                <td><Status tone={STEP[st.state].tone} label={STEP[st.state].label} /></td>
+                <td className="mono">{st.at ? dmy(st.at)
+                  : st.state === 'WAITING' && approval.waitingSince ? `since ${dmy(approval.waitingSince)}` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export function IndentDetail() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -711,92 +907,9 @@ export function IndentDetail() {
           </Banner>
         )}
 
-        {data.pipeline && data.status !== 'DRAFT' && (() => {
-          // one column per step, in the order the material moves; "sent"
-          // is what left on a challan, "on the road" the part of it
-          // nobody at site has received yet
-          const n = (v) => Number(v) || 0;
-          const cell = (v) => (n(v) ? qty(v) : '—');
-          const sum = (k) => data.flow.reduce((t, f) => t + n(f[k]), 0);
-          const approved = ['APPROVED', 'CLOSED'].includes(data.status);
-          const COLS = [
-            ['indented_qty', 'Asked for'], ['ordered_qty', 'PO raised'],
-            ['received_qty', 'Received at central store'], ['issued_qty', 'Sent to site'],
-            ['in_transit_qty', 'On the road'], ['at_site_qty', 'Received at site'],
-            ['to_deliver_qty', 'Pending'],
-          ];
-          return (
-            <Card title="Where the material is"
-              sub="Item by item: asked for, on a PO, received at the central store, sent, on the road, received at site, and still pending"
-              actions={
-                <button className="btn sm" onClick={() => downloadCsv(`prn-${data.docNo}`, [
-                  ['PRN', data.docNo], ['Site', data.site.name],
-                  ['Stage', prnStage(stage).label], [],
-                  ['Item code', 'Item', 'Unit', ...COLS.map((c) => c[1]), 'Order awaiting approval',
-                    'Not ordered yet'],
-                  ...data.flow.map((f) => [f.item_code, f.item_name, f.uom, ...COLS.map((c) => f[c[0]]),
-                    f.pending_gm_qty, f.to_order_qty]),
-                ])}><Icon name="download" size={14} />Download</button>
-              }>
-              <div className="pad">
-                <Journey stage={stage} />
-                <div className="stats" style={{ marginTop: 18 }}>
-                  {COLS.map(([k, label]) => (
-                    <Stat key={k} n={qty(data.pipeline[k])} label={label.toLowerCase()}
-                      tone={k === 'to_deliver_qty' && !n(data.pipeline[k]) ? 'ok' : undefined} />
-                  ))}
-                </div>
-              </div>
+        <PrnItems data={data} stage={stage} />
 
-              <div className="tw">
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 110 }}>Item code</th><th>Item</th><th style={{ width: 62 }}>Unit</th>
-                      {COLS.map(([k, label]) => <th key={k} className="rt">{label}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.flow.map((f) => (
-                      <tr key={`${f.item_id}-${f.make_id || ''}`}>
-                        <td style={{ whiteSpace: 'nowrap' }}><Code>{f.item_code}</Code></td>
-                        <td>{f.item_name}{f.make_name && <small>{f.make_name}</small>}</td>
-                        <td>{f.uom}</td>
-                        <td className="rt mono"><b>{qty(f.indented_qty)}</b></td>
-                        <td className="rt mono">
-                          {cell(f.ordered_qty)}
-                          {n(f.pending_gm_qty) > 0 && (
-                            <small>{qty(f.pending_gm_qty)} on an order awaiting approval</small>
-                          )}
-                          {approved && n(f.to_order_qty) > 0 && (
-                            <small style={{ color: 'var(--bad)' }}>{qty(f.to_order_qty)} not ordered yet</small>
-                          )}
-                        </td>
-                        <td className="rt mono">{cell(f.received_qty)}</td>
-                        <td className="rt mono">{cell(f.issued_qty)}</td>
-                        <td className="rt mono">{cell(f.in_transit_qty)}</td>
-                        <td className="rt mono">{n(f.at_site_qty) ? <b>{qty(f.at_site_qty)}</b> : '—'}</td>
-                        <td className="rt mono">
-                          {n(f.to_deliver_qty)
-                            ? <b>{qty(f.to_deliver_qty)}</b>
-                            : <Status tone="done" label="None" />}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  {data.flow.length > 1 && (
-                    <tfoot>
-                      <tr>
-                        <th colSpan={3} style={{ textAlign: 'left' }}>All items</th>
-                        {COLS.map(([k]) => <th key={k} className="rt mono">{qty(sum(k))}</th>)}
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
-              </div>
-            </Card>
-          );
-        })()}
+        {data.approval && <ApprovalSteps approval={data.approval} />}
 
         {data.orders?.length > 0 && (
           <Card title="Purchase orders for this PRN">
@@ -830,68 +943,6 @@ export function IndentDetail() {
             </div>
           </Card>
         )}
-
-        {data.rolledUp && (
-          <Card title="Items on this PRN"
-            sub="One line per item — this is what Procurement buys and the store picks, whatever BOQ line it was asked for on">
-            <div className="tw">
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 110 }}>Item code</th><th>Item</th>
-                    <th style={{ width: 76 }}>Unit</th>
-                    <th className="rt" style={{ width: 110 }}>Qty</th>
-                    <th style={{ width: 180 }}>From BOQ lines</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.rollup.map((r) => (
-                    <tr key={`${r.item_id}-${r.make_id || ''}`}>
-                      <td><Code>{r.item_code}</Code></td>
-                      <td><b>{r.item_name}</b>{r.make_name && <small>{r.make_name}</small>}</td>
-                      <td>{r.uom}</td>
-                      <td className="rt mono"><b>{qty(r.qty)}</b></td>
-                      <td>{r.boq_snos}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-
-        <Card title={data.rolledUp ? 'BOQ lines it was raised against' : 'Lines'}
-          sub={data.rolledUp
-            ? 'Kept on the record so a variation can still be traced to the BOQ line it came from'
-            : undefined}>
-          <div className="tw">
-            <table>
-              <thead>
-                <tr>
-                  <th>Sl no</th><th>Item</th><th>Unit</th>
-                  <th className="rt">Estimate</th><th className="rt">This PRN</th><th>Against estimate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.lines.map((l) => (
-                  <tr key={l.id}>
-                    <td className="sn">{l.sno}</td>
-                    <td><b>{l.item_name}</b><small><Code>{l.item_code}</Code>{l.make_name ? ` · ${l.make_name}` : ''}</small></td>
-                    <td>{l.uom}</td>
-                    <td className="rt mono">{qty(l.effective_est)}</td>
-                    <td className="rt mono"><b>{qty(l.qty)}</b></td>
-                    <td>
-                      {Number(l.over_qty) > 0
-                        ? <Status tone={data.severity === 'bad' ? 'stopped' : 'attention'} icon="alert"
-                          label={`${qty(l.over_qty)} over`} />
-                        : <span style={{ color: 'var(--faint)' }}>Within estimate</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
 
         <Card title="History">
           <div className="tw">

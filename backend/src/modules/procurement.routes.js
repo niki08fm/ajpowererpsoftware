@@ -175,4 +175,97 @@ router.post('/demand',
   })
 );
 
+/* ========================================================= by item */
+/**
+ * The same queue, turned round: one row per item across every approved
+ * PRN that still has some of it to order. The buyer negotiates per item,
+ * not per PRN — thirty metres of cable wanted by three sites is one
+ * purchase — so this is the view that says what to buy, in total.
+ *
+ * Only APPROVED PRNs count: a PRN reaches the buyer after both levels of
+ * approval, never before.
+ */
+const itemFilters = z.object({
+  branchId: z.coerce.number().int().positive().optional(),
+  siteId: z.coerce.number().int().positive().optional(),
+  q: z.string().trim().max(120).optional(),
+  sort: z.enum(['item', 'qty', 'prns', 'needed']).default('item'),
+});
+
+const itemWhere = (q) => {
+  const where = [`i.status = 'APPROVED'`, 'f.to_order_qty > 0'];
+  const params = [];
+  if (q.branchId) { where.push('s.branch_id = ?'); params.push(q.branchId); }
+  if (q.siteId) { where.push('i.site_id = ?'); params.push(q.siteId); }
+  if (q.q) {
+    where.push('(f.item_name LIKE ? OR f.item_code LIKE ?)');
+    params.push(`%${q.q}%`, `%${q.q}%`);
+  }
+  return { where: where.join(' AND '), params };
+};
+
+router.get('/items', validate(itemFilters, 'query'), wrap(async (req, res) => {
+  const { where, params } = itemWhere(req.query);
+  const order = {
+    item: 'item_name', qty: 'to_order_qty DESC', prns: 'prns DESC, item_name',
+    needed: 'first_needed IS NULL, first_needed, item_name',
+  }[req.query.sort];
+  const rows = await many(
+    `SELECT f.item_id, f.make_id, f.item_code, f.item_name, f.uom, f.make_name,
+            ROUND(SUM(f.indented_qty), 3) AS indented_qty,
+            ROUND(SUM(f.ordered_qty), 3)  AS ordered_qty,
+            ROUND(SUM(f.pending_gm_qty), 3) AS pending_gm_qty,
+            ROUND(SUM(f.to_order_qty), 3) AS to_order_qty,
+            COUNT(DISTINCT i.id)          AS prns,
+            COUNT(DISTINCT i.site_id)     AS sites,
+            MIN(i.needed_by)              AS first_needed,
+            GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') AS site_names
+       FROM v_indent_item_flow f
+       JOIN indents i ON i.id = f.indent_id
+       JOIN sites s   ON s.id = i.site_id
+      WHERE ${where}
+      GROUP BY f.item_id, f.make_id, f.item_code, f.item_name, f.uom, f.make_name
+      ORDER BY ${order}`, params);
+  res.json({
+    rows,
+    totals: {
+      items: rows.length,
+      toOrder: rows.reduce((t, r) => t + Number(r.to_order_qty), 0),
+    },
+  });
+}));
+
+/** One item: which PRNs want it, and on which BOQ lines of each. */
+router.get('/items/:itemId',
+  validate(itemFilters.extend({ makeId: z.coerce.number().int().positive().optional() }), 'query'),
+  wrap(async (req, res) => {
+    const { where, params } = itemWhere(req.query);
+    const make = req.query.makeId ? 'AND f.make_id = ?' : 'AND f.make_id IS NULL';
+    const args = [...params, req.params.itemId, ...(req.query.makeId ? [req.query.makeId] : [])];
+    const prns = await many(
+      `SELECT i.id, i.doc_no, i.indent_date, i.needed_by, i.site_id, s.name AS site_name,
+              s.branch_id, b.name AS branch_name,
+              f.indented_qty, f.ordered_qty, f.pending_gm_qty, f.to_order_qty
+         FROM v_indent_item_flow f
+         JOIN indents i  ON i.id = f.indent_id
+         JOIN sites s    ON s.id = i.site_id
+         JOIN branches b ON b.id = s.branch_id
+        WHERE ${where} AND f.item_id = ? ${make}
+        ORDER BY i.needed_by IS NULL, i.needed_by, i.id`, args);
+    const lines = prns.length ? await many(
+      `SELECT il.indent_id, bl.sno, il.qty
+         FROM indent_lines il JOIN boq_lines bl ON bl.id = il.boq_line_id
+        WHERE il.indent_id IN (?) AND il.item_id = ?
+          AND ${req.query.makeId ? 'il.make_id = ?' : 'il.make_id IS NULL'}
+        ORDER BY bl.sno`,
+      [prns.map((p) => p.id), req.params.itemId, ...(req.query.makeId ? [req.query.makeId] : [])]) : [];
+    res.json({
+      prns: prns.map((p) => ({
+        ...p,
+        lines: lines.filter((l) => l.indent_id === p.id).map((l) => ({ sno: l.sno, qty: l.qty })),
+      })),
+    });
+  })
+);
+
 module.exports = router;
