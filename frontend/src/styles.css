@@ -760,3 +760,10 @@ tfoot .frz { background: inherit; }
 tfoot th.frz { background: var(--sunk, var(--line-2)); }
 .frz-end { box-shadow: inset -1px 0 0 var(--line), 6px 0 8px -6px rgb(0 0 0 / .12); }
 tbody tr:hover > .frz { background: var(--line-2); }
+
+/* the alerts bell in the top bar: a number only when something is wrong */
+.top .top-btn.bell { position: relative; padding-left: 9px; padding-right: 9px; }
+.top .top-btn.bell .count {
+  position: absolute; top: -6px; right: -6px; background: var(--st-stop); color: #fff;
+  box-shadow: 0 0 0 2px var(--card);
+}

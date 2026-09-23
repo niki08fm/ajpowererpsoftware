@@ -103,6 +103,33 @@ describe('procurement', () => {
     assert.equal(q[0].needed_by.slice(0, 10), '2026-09-20', 'soonest needed first');
   });
 
+  test('an approved PRN not at site by its needed-by date is an alert', async (t) => {
+    if (!live) return t.skip('no database');
+    const [was] = await pool.query('SELECT id, needed_by FROM indents WHERE id IN (?, ?)', [S.inda, S.indb]);
+    await pool.query('UPDATE indents SET needed_by = CURDATE() - INTERVAL 4 DAY WHERE id = ?', [S.inda]);
+    await pool.query('UPDATE indents SET needed_by = CURDATE() + INTERVAL 5 DAY WHERE id = ?', [S.indb]);
+    try {
+      const rows = (await as(api, MANAGEMENT)('/alerts')).body.rows;
+      const late = rows.find((r) => r.key === `prn-${S.inda}`);
+      assert.equal(late?.kind, 'PRN_LATE');
+      assert.match(late.title, /4 day\(s\) past its needed-by date/);
+      assert.match(late.detail, /0 of 60 at site · 60 still to reach the site/);
+      assert.ok(!rows.some((r) => r.key === `prn-${S.indb}`), 'not due yet: no alert');
+      assert.ok(!(await api('/alerts')).body.rows.some((r) => r.kind === 'PRN_LATE'), 'not for Planning');
+
+      // the buyer hears about the one past its date that nobody has ordered
+      const [[buyer]] = await pool.query(`SELECT id FROM users WHERE department = 'Procurement' ORDER BY id LIMIT 1`);
+      const mine = (await as(api, buyer.id)('/alerts')).body.rows;
+      const unordered = mine.find((r) => r.key === `prnorder-${S.inda}`);
+      assert.equal(unordered?.kind, 'PRN_NOT_ORDERED');
+      assert.match(unordered.detail, /60 of 60 on no purchase order yet/);
+      assert.ok(!mine.some((r) => r.key === `prnorder-${S.indb}`), 'the one not yet due is not');
+      assert.ok(!mine.some((r) => r.kind === 'PRN_LATE'), 'delivery lateness is the store\'s alert, not the buyer\'s');
+    } finally {
+      for (const w of was) await pool.query('UPDATE indents SET needed_by = ? WHERE id = ?', [w.needed_by, w.id]);
+    }
+  });
+
   test('the queue can be filtered to one site', async (t) => {
     if (!live) return t.skip('no database');
     const q = (await api(`/procurement/queue?branchId=1&siteId=${S.sitea}`)).body;
@@ -342,6 +369,22 @@ describe('procurement', () => {
     assert.equal(r.status, 201);
     assert.equal(r.body.poState, 'PARTIAL');
     assert.equal(Number(r.body.pendingQty), 30);
+  });
+
+  test('a PO past its expected date and not fully received is an alert for Management and Procurement', async (t) => {
+    if (!live) return t.skip('no database');
+    const [[was]] = await pool.query('SELECT expected_date FROM purchase_orders WHERE id = ?', [S.po]);
+    await pool.query('UPDATE purchase_orders SET expected_date = CURDATE() - INTERVAL 3 DAY WHERE id = ?', [S.po]);
+    const rows = (await as(api, MANAGEMENT)('/alerts')).body.rows;
+    const late = rows.find((r) => r.key === `po-${S.po}`);
+    assert.equal(late?.kind, 'PO_LATE');
+    assert.match(late.title, /3 day\(s\) late/);
+    assert.match(late.detail, /70 of 100 received/);
+    const [[buyer]] = await pool.query(`SELECT id FROM users WHERE department = 'Procurement' ORDER BY id LIMIT 1`);
+    assert.ok((await as(api, buyer.id)('/alerts')).body.rows.some((r) => r.key === `po-${S.po}`),
+      'the buyer who chases the supplier hears too');
+    assert.ok(!(await api('/alerts')).body.rows.some((r) => r.kind === 'PO_LATE'), 'but not Planning');
+    await pool.query('UPDATE purchase_orders SET expected_date = ? WHERE id = ?', [was.expected_date, S.po]);
   });
 
   test('what arrived is on the shelf at the store it was sent to', async (t) => {

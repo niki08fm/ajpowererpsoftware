@@ -17,7 +17,7 @@ export function PrnLink({ id, children, className = 'linkish' }) {
   return (
     <>
       <button type="button" className={className}
-        style={className === 'linkish' ? undefined : { font: 'inherit', cursor: 'pointer', border: 0 }}
+        style={className === 'chip' ? { font: 'inherit', cursor: 'pointer', border: 0 } : undefined}
         onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen(true); }}>
         {children}
       </button>

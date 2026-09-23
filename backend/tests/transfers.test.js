@@ -179,6 +179,26 @@ describe('sourcing a PRN from another site', () => {
     assert.equal(Number(stock.rows.find((r) => r.item_id === S.box).qty), 40, '60 less 20');
   });
 
+  test('a challan nobody signs for within a day is an alert, and so is a short delivery', async (t) => {
+    if (!live) return t.skip('no database');
+    const mgmt = as(api, MANAGEMENT);
+    const mine = async () => (await mgmt('/alerts')).body.rows.find((r) => r.key === `dc-${S.dc}`);
+
+    assert.equal(await mine(), undefined, 'dispatched just now: not late yet');
+    await pool.query(
+      'UPDATE delivery_challans SET dispatched_at = NOW() - INTERVAL 2 DAY WHERE id = ?', [S.dc]);
+    assert.equal((await mine())?.kind, 'NOT_SIGNED', 'a day on and nothing entered by the site');
+    assert.equal((await api('/alerts')).body.count, 0, 'a Planning login gets no alerts');
+
+    const pending = (await api(`/challans/${S.dc}/pending`)).body;
+    const part = await api(`/challans/${S.dc}/acknowledge`, { method: 'POST', body: {
+      ackDate: today(), lines: [{ dcLineId: pending.lines[0].dc_line_id, qty: 5 }] } });
+    assert.equal(part.status, 201);
+    const short = await mine();
+    assert.equal(short?.kind, 'SHORT_DELIVERY', 'signed for less than was sent');
+    assert.match(short.detail, /5 of 20 signed for/);
+  });
+
   test('to B it is simply its own PRN arriving', async (t) => {
     if (!live) return t.skip('no database');
     const inbox = (await api(`/site-store/${S.b.id}/inbox`)).body;
@@ -192,6 +212,8 @@ describe('sourcing a PRN from another site', () => {
       ackDate: today(),
       lines: pending.lines.map((l) => ({ dcLineId: l.dc_line_id, qty: Number(l.in_transit_qty) })) } });
     assert.equal(ack.status, 201);
+    assert.ok(!(await as(api, MANAGEMENT)('/alerts')).body.rows.some((r) => r.key === `dc-${S.dc}`),
+      'received in full: the alert is gone by itself');
 
     // B's PRN is satisfied, exactly as if the store had sent it
     const flow = (await api(`/indents/${S.prn}`)).body;

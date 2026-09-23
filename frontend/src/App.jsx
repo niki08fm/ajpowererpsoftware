@@ -1,11 +1,12 @@
 import { createContext, useContext, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { api, setToken, getToken, whenSignedOut, setWrites } from './api';
+import { api, setToken, getToken, whenSignedOut, setWrites, plural } from './api';
 import {
   ToastHost, DialogHost, Loading, ErrorNote, Field, Modal, useToast, Status,
 } from './components/ui';
 import { Icon } from './components/icons';
 import { Chooser } from './pages/Choose';
+import Alerts from './pages/Alerts';
 import { Approvals, Decided } from './pages/Approvals';
 
 import Sites from './pages/Sites';
@@ -62,6 +63,7 @@ export const SECTIONS = [
     screens: [
       { to: '/approvals', label: 'Waiting on me', badge: 'approvals', badgeSays: 'waiting for your decision', end: true },
       { to: '/approvals/decided', label: 'Decided by me' },
+      { to: '/alerts', label: 'Alerts', hidden: true },
     ],
   },
   {
@@ -113,6 +115,7 @@ export const SECTIONS = [
       // reached from a PRN, never from the menu
       { to: '/store/issue', label: 'Dispatch sheet', hidden: true },
       { to: '/store/source', label: 'Ask another site', hidden: true },
+      { to: '/alerts', label: 'Alerts', hidden: true },
     ],
   },
   {
@@ -125,6 +128,7 @@ export const SECTIONS = [
       { to: '/comparisons', label: 'Rate comparisons' },
       { to: '/purchase-orders', label: 'Purchase orders' },
       { to: '/suppliers', label: 'Suppliers', more: true },
+      { to: '/alerts', label: 'Alerts', hidden: true },
     ],
   },
   {
@@ -213,6 +217,9 @@ const MENU = {
 // open to an overseer by path, but they are forms for doing the work
 const DOING = [/^\/indents\/new/, /\/edit$/, /^\/sites\/new/, /^\/site\/(issue|returns|transfers)/,
   /^\/store\/(issue|source)/, /^\/grns$/];
+
+// who is told when a delivery goes wrong or an order runs late
+const ALERTED = ['Management', 'General Manager', 'Store', 'Procurement'];
 
 export function menuFor(access) {
   const pick = MENU[access?.role] || {};
@@ -338,6 +345,20 @@ function Shell({ children }) {
   const { pathname, state } = useLocation();
   const section = sectionFor(sections, pathname, state?.dept);
   const [pwOpen, setPwOpen] = useState(false);
+
+  // alerts for the people who oversee and for the store: checked every
+  // minute and whenever the screen changes, so a fix clears the count
+  const alerted = ALERTED.includes(user.department);
+  const [alertCount, setAlertCount] = useState(0);
+  const refreshAlerts = useCallback(() => {
+    if (!alerted) return;
+    api.get('/alerts/count').then((r) => setAlertCount(r.count)).catch(() => {});
+  }, [alerted]);
+  useEffect(() => {
+    refreshAlerts();
+    const t = setInterval(refreshAlerts, 60000);
+    return () => clearInterval(t);
+  }, [refreshAlerts, pathname]);
   const screen = screenFor(section, pathname);
   const [dark, setDark] = useTheme();
 
@@ -370,6 +391,7 @@ function Shell({ children }) {
     : branches.find((b) => b.id === branchSel)?.name || 'All branches';
 
   const inner = {
+    refreshAlerts, alertCount,
     ...outer,
     branchId,
     branchName,
@@ -459,6 +481,13 @@ function Shell({ children }) {
           <Scope section={section} site={site} store={store} branches={branches}
             allSites={allSites} allStores={allStores} setSite={setSite} setStore={setStore}
             branchSel={branchSel} setBranch={setBranch} />
+          {ALERTED.includes(user.department) && (
+            <NavLink to="/alerts" className="top-btn bell" title={alertCount ? `${plural(alertCount, 'alert')} — open them` : 'No alerts'}
+              aria-label={alertCount ? `${alertCount} alerts` : 'No alerts'}>
+              <Icon name="bell" size={15} />
+              {alertCount > 0 && <span className="count">{alertCount}</span>}
+            </NavLink>
+          )}
           <div className="me" title={user.email}>
             <b>{user.name}</b>
             <span>{user.department}</span>
@@ -775,6 +804,7 @@ function Workspace({ user, access, signOut }) {
                     element={<Navigate to={home} replace />} />
                 ))}
                 <Route path="/approvals" element={<Approvals />} />
+                <Route path="/alerts" element={<Alerts />} />
                 <Route path="/approvals/decided" element={<Decided />} />
                 <Route path="/sites" element={<Sites />} />
                 <Route path="/sites/new" element={<NewSite />} />

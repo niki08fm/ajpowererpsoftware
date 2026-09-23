@@ -6,6 +6,7 @@ import {
   useApi, Card, Field, Empty, Loading, ErrorNote, Modal, Stat, useToast, Status, Code,
 } from '../components/ui';
 import { Icon } from '../components/icons';
+import { AlertList } from './Alerts';
 
 /**
  * Everything waiting on your decision, in one place.
@@ -97,7 +98,9 @@ const ageTone = (d) => (d >= 3 ? 'attention' : 'neutral');
 const ageWord = (d) => (d === 0 ? 'Today' : plural(d, 'day'));
 
 export function Approvals() {
-  const { refreshApprovals } = useApp();
+  const { refreshApprovals, access } = useApp();
+  // what has gone wrong, shown to the people who oversee before anything else
+  const alerts = useApi(access?.overseer ? '/alerts' : null, [access?.overseer]);
   const [type, setType] = useState('');
   const [deciding, setDeciding] = useState(null);   // { row, decision }
   const { data, error, loading, reload } = useApi(`/approvals${type ? `?type=${type}` : ''}`, [type]);
@@ -112,6 +115,14 @@ export function Approvals() {
         actions={<button className="btn" onClick={reload}><Icon name="refresh" size={14} />Refresh</button>} />
       <div className="page-body">
         {error && <ErrorNote error={error} onRetry={reload} />}
+
+        {(alerts.data?.rows || []).length > 0 && (
+          <Card title="Needs attention"
+            sub="Challans not signed for a day after dispatch, short deliveries, PRNs past their needed-by date, and orders past their due date"
+            actions={<Link className="btn sm" to="/alerts">All alerts</Link>}>
+            <AlertList rows={alerts.data.rows.slice(0, 5)} compact />
+          </Card>
+        )}
 
         {data && (
           <Card className="pad">
