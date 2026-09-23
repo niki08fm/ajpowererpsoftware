@@ -257,6 +257,8 @@ export default function Procurement() {
 
       {buying && (
         <NewOrder indentIds={picked} comparison={cmp && cmp.status === 'APPROVED' ? cmp : null}
+          only={cmp && cmp.status === 'APPROVED'
+            ? Object.fromEntries(cmp.items.map((i) => [i.item_id, Number(i.qty)])) : undefined}
           onClose={() => { setBuying(false); setParams({}); }}
           onDone={() => {
             setBuying(false); setPicked([]); setParams({}); reload(); toast('Purchase order raised', 'ok');
@@ -289,6 +291,8 @@ function NewOrder({ indentIds, comparison, only, onClose, onDone }) {
         setDemand(d);
         // the chosen supplier's rate on this sheet, item by item
         const quoted = {};
+        const cmpQty = {};
+        for (const it of comparison?.items || []) cmpQty[it.item_id] = Number(it.qty);
         if (comparison) {
           const cs = comparison.suppliers
             .find((x) => x.supplier_id === comparison.chosen_supplier_id);
@@ -309,8 +313,10 @@ function NewOrder({ indentIds, comparison, only, onClose, onDone }) {
         setOrder(Object.fromEntries(d.lines
           .filter((l) => l.toOrderQty > 0 && (!only || only[l.itemId] != null))
           .map((l) => [l.itemId, {
-            // raised from "By item": the quantity the buyer chose there
-            qty: String(only ? Math.min(Number(only[l.itemId]), l.toOrderQty) : l.toOrderQty),
+            // raised from "By item": the quantity the buyer chose there;
+            // from a comparison: the order qty agreed on the sheet
+            qty: String(only ? Math.min(Number(only[l.itemId]), l.toOrderQty)
+              : cmpQty[l.itemId] != null ? Math.min(cmpQty[l.itemId], l.toOrderQty) : l.toOrderQty),
             rate: String(quoted[l.itemId] ?? l.suggestedRate ?? ''),
             gstRate: String(l.gstRate),
           }])));
@@ -528,6 +534,27 @@ function ItemsToBuy({ branchId, siteId, q, onOrder }) {
     else next[k] = String(Number(r.short_qty) > 0 ? Number(r.short_qty) : Number(r.to_order_qty));
     return next;
   });
+  const nav = useNavigate();
+  const toast = useToast();
+  const [comparing, setComparing] = useState(false);
+  // a rate comparison for just these items, at these quantities, still
+  // tied to the PRNs they came from
+  const compare = async () => {
+    setComparing(true);
+    try {
+      const ids = new Set();
+      for (const r of chosen) String(r.indent_ids || '').split(',').filter(Boolean).forEach((x) => ids.add(Number(x)));
+      const indentIds = [...ids];
+      const r = await api.post('/comparisons', {
+        ...(branchId ? { branchId } : {}),
+        indentIds,
+        items: chosen.map((x) => ({ itemId: x.item_id, makeId: x.make_id || null, qty: Number(pick[key(x)]) })),
+        title: `${plural(chosen.length, 'item')} · ${plural(indentIds.length, 'PRN')}`,
+      });
+      nav(`/comparisons/${r.id}`);
+    } catch (e) { toast(e.message, 'bad'); }
+    setComparing(false);
+  };
   const raise = () => {
     const ids = new Set();
     const only = {};
@@ -552,6 +579,11 @@ function ItemsToBuy({ branchId, siteId, q, onOrder }) {
       sub={`${plural(rows.length, 'item')} still to order across approved PRNs — open one to see its PRNs and BOQ lines`}
       actions={
         <>
+          {canWrite('/comparisons') && chosen.length > 0 && (
+            <button className="btn" disabled={!!bad || comparing} onClick={compare}>
+              Compare rates for {plural(chosen.length, 'item')}
+            </button>
+          )}
           {canOrder && (
             <button className="btn pri" disabled={!chosen.length || !!bad} onClick={raise}
               title={bad ? `${bad.item_name}: order between 1 and ${qty(bad.to_order_qty)}` : undefined}>

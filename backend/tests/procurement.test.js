@@ -132,6 +132,19 @@ describe('procurement', () => {
     assert.ok(prns[0].lines[0].sno, 'with its BOQ line number');
   });
 
+  test('a comparison can be started for chosen items, capped at what the PRNs need', async (t) => {
+    if (!live) return t.skip('no database');
+    const r = await api('/comparisons', { method: 'POST', body: {
+      indentIds: [S.inda, S.indb], items: [{ itemId: S.box, qty: 500 }] } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const c = (await api(`/comparisons/${r.body.id}`)).body;
+    assert.equal(c.items.length, 1, 'only the item chosen');
+    assert.equal(Number(c.items[0].qty), 100, 'no more than the 60 + 40 the PRNs need');
+    assert.equal(Number(c.items[0].need_qty), 100);
+    assert.equal(c.indents.length, 2, 'still tied to both PRNs');
+    await api(`/comparisons/${r.body.id}`, { method: 'DELETE' });
+  });
+
   /* --------------------------------------------------------- demand */
   test('two indents for the same item come out as one line to buy', async (t) => {
     if (!live) return t.skip('no database');

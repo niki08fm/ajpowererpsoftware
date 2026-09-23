@@ -60,6 +60,25 @@ router.get('/:id', wrap(async (req, res) => {
        LEFT JOIN makes mk ON mk.id = ci.make_id
       WHERE ci.comparison_id = ? ORDER BY it.name`, [c.comparison_id]);
 
+  // beside each item: what the PRNs behind the sheet still need, and
+  // what the branch's central store already holds of it
+  const need = await many(
+    `SELECT f.item_id, f.make_id, SUM(f.to_order_qty) AS need_qty
+       FROM comparison_indents ci JOIN v_indent_item_flow f ON f.indent_id = ci.indent_id
+      WHERE ci.comparison_id = ? GROUP BY f.item_id, f.make_id`, [c.comparison_id]);
+  const store = await one(
+    `SELECT id, name FROM sites
+      WHERE branch_id = ? AND site_type = 'STORE' AND status = 'ACTIVE'
+      ORDER BY is_central DESC, id LIMIT 1`, [c.branch_id]);
+  const stock = store && items.length ? await many(
+    `SELECT item_id, qty FROM v_stock_balance WHERE site_id = ? AND item_id IN (?)`,
+    [store.id, items.map((i) => i.item_id)]) : [];
+  for (const i of items) {
+    const n = need.find((x) => x.item_id === i.item_id && (x.make_id || null) === (i.make_id || null));
+    i.need_qty = n ? Number(n.need_qty) : Number(i.qty);
+    i.store_qty = Number(stock.find((x) => x.item_id === i.item_id)?.qty || 0);
+  }
+
   const suppliers = await many(
     `SELECT * FROM v_comparison_supplier WHERE comparison_id = ? ORDER BY supplier_name`,
     [c.comparison_id]);
@@ -77,7 +96,7 @@ router.get('/:id', wrap(async (req, res) => {
       WHERE ci.comparison_id = ? ORDER BY i.doc_no`, [c.comparison_id]);
 
   res.json({
-    ...c, items, suppliers, quotes, indents,
+    ...c, items, suppliers, quotes, indents, storeName: store?.name || null,
     // the point of the sheet, stated rather than left to be spotted
     cheapestIsNotLowest: !!(c.best_landed_supplier_id && c.best_quoted_supplier_id
       && c.best_landed_supplier_id !== c.best_quoted_supplier_id),
@@ -126,16 +145,44 @@ router.post('/',
     }
     if (!branchId) throw badRequest('Say which branch this comparison is for');
 
-    // seeded from indents, or typed in directly — but not from nothing
+    // seeded from indents, or typed in directly — but not from nothing.
+    // Items named alongside indents (the buyer ticked them in "By item")
+    // are the sheet: only those, at those quantities, capped at what the
+    // indents still need of each.
     let lines = b.items;
-    if (b.indentIds.length) {
+    if (b.indentIds.length && b.items.length) {
+      const marks = b.indentIds.map(() => '?').join(',');
+      const need = await many(
+        `SELECT f.item_id, f.make_id, SUM(f.to_order_qty) AS qty
+           FROM v_indent_item_flow f
+          WHERE f.indent_id IN (${marks}) AND f.to_order_qty > 0
+          GROUP BY f.item_id, f.make_id`, b.indentIds);
+      lines = b.items.map((l) => {
+        const n = need.find((x) => x.item_id === l.itemId && (x.make_id || null) === (l.makeId || null));
+        if (!n) throw badRequest('One of those items is not still needed on the PRNs chosen');
+        return { ...l, qty: Math.min(l.qty, Number(n.qty)) };
+      });
+    } else if (b.indentIds.length) {
       const marks = b.indentIds.map(() => '?').join(',');
       const rows = await many(
         `SELECT f.item_id, f.make_id, SUM(f.to_order_qty) AS qty
            FROM v_indent_item_flow f
           WHERE f.indent_id IN (${marks}) AND f.to_order_qty > 0
           GROUP BY f.item_id, f.make_id`, b.indentIds);
-      lines = rows.map((r) => ({ itemId: r.item_id, makeId: r.make_id, qty: Number(r.qty) }));
+      // start at what the central store cannot send; if it can send all
+      // of it the item stays on at the full need, for the buyer to decide
+      const store = await one(
+        `SELECT id FROM sites WHERE branch_id = ? AND site_type = 'STORE' AND status = 'ACTIVE'
+          ORDER BY is_central DESC, id LIMIT 1`, [branchId]);
+      const stock = store && rows.length ? await many(
+        `SELECT item_id, qty FROM v_stock_balance WHERE site_id = ? AND item_id IN (?)`,
+        [store.id, rows.map((r) => r.item_id)]) : [];
+      lines = rows.map((r) => {
+        const need = Number(r.qty);
+        const held = Number(stock.find((x) => x.item_id === r.item_id)?.qty || 0);
+        const short = Math.round((need - held) * 1000) / 1000;
+        return { itemId: r.item_id, makeId: r.make_id, qty: short > 0 ? short : need };
+      });
     }
     if (!lines.length) throw badRequest('There is nothing to compare');
 
@@ -221,6 +268,35 @@ router.patch('/:id/suppliers/:csId',
 );
 
 /** The rates, saved together — a half-entered quote compares badly. */
+/**
+ * How much of an item to buy on this sheet. It starts at what the PRNs
+ * still need; the buyer lowers it when the central store can send some,
+ * and the supplier totals and the order that follows use this figure.
+ */
+router.patch('/:id/items/:ciId',
+  validate(z.object({ qty: z.coerce.number().positive('The quantity to order has to be more than 0') })),
+  wrap(async (req, res) => {
+    const c = await one(`SELECT id, status FROM comparisons WHERE id = ?`, [req.params.id]);
+    if (!c) throw notFound('No such comparison');
+    if (c.status !== 'DRAFT') throw conflict('A supplier has been chosen — reopen the comparison to change it');
+    const item = await one(
+      `SELECT ci.id, ci.item_id, ci.make_id, it.name FROM comparison_items ci
+         JOIN items it ON it.id = ci.item_id
+        WHERE ci.id = ? AND ci.comparison_id = ?`, [req.params.ciId, c.id]);
+    if (!item) throw notFound('That item is not on this comparison');
+    const need = await one(
+      `SELECT SUM(f.to_order_qty) AS q FROM comparison_indents ci
+         JOIN v_indent_item_flow f ON f.indent_id = ci.indent_id
+        WHERE ci.comparison_id = ? AND f.item_id = ? AND f.make_id <=> ?`,
+      [c.id, item.item_id, item.make_id]);
+    if (need?.q != null && req.body.qty > Number(need.q) + 0.0005) {
+      throw badRequest(`${item.name}: the PRNs need ${Number(need.q)}, so ${req.body.qty} cannot be ordered`);
+    }
+    await run(`UPDATE comparison_items SET qty = ? WHERE id = ?`, [req.body.qty, item.id]);
+    res.json({ ok: true });
+  })
+);
+
 router.put('/:id/quotes',
   validate(z.object({
     quotes: z.array(z.object({
